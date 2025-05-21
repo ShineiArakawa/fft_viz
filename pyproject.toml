@@ -7,8 +7,14 @@ requires-python = ">=3.13"
 dependencies = [
     "pyviewer",
     "research-utilities",
+    "torchvision>=0.22.0",
 ]
 
 [tool.uv.sources]
-research-utilities = { git = "https://github.com/ShineiArakawa/research-utilities.git", rev = "v1.1.9" }
+research-utilities = { git = "https://github.com/ShineiArakawa/research-utilities.git", rev = "v1.1.10" }
 pyviewer = { git = "https://github.com/harskish/pyviewer.git" }
+
+[dependency-groups]
+dev = [
+    "scalene>=1.5.51",
+]
