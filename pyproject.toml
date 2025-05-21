@@ -1,0 +1,14 @@
+[project]
+name = "fft-viz"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "pyviewer",
+    "research-utilities",
+]
+
+[tool.uv.sources]
+research-utilities = { git = "https://github.com/ShineiArakawa/research-utilities.git", rev = "v1.1.9" }
+pyviewer = { git = "https://github.com/harskish/pyviewer.git" }
