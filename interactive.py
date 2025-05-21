@@ -24,6 +24,8 @@ from imgui_bundle import imgui, implot
 
 # autopep8: on
 
+logger = rutils.get_logger()
+
 # --------------------------------------------------------------------------------------------------------------------------------------------------------
 # Load the C++/CUDA module
 
@@ -31,9 +33,33 @@ from imgui_bundle import imgui, implot
 cuda_enabled = torch.cuda.is_available() and _torch_util.get_extension_loader()._check_command('nvcc')
 
 # Build and load the C++/CUDA module to compute the radial power spectral density
-print('Loading the C++/CUDA module...')
+logger.info('Loading the C++/CUDA module...')
 _module = _signal._get_cpp_module(is_cuda=cuda_enabled, with_omp=True)
-print('done.')
+logger.info('done.')
+
+# --------------------------------------------------------------------------------------------------------------------------------------------------------
+# Device specific settings
+
+if cuda_enabled:
+    _device = torch.device('cuda')
+    _dtype = torch.float64
+
+    _n_radial_divs = 360 * 2
+    _n_polar_divs = 1024
+# elif torch.backends.mps.is_available():
+#     _device = torch.device('mps')
+#     _dtype = torch.float32
+
+#     _n_radial_divs = 32
+#     _n_polar_divs = 32
+else:
+    _device = torch.device('cpu')
+    _dtype = torch.float64
+
+    _n_radial_divs = 32
+    _n_polar_divs = 32
+
+logger.info(f'Using device: {_device}, dtype: {_dtype}')
 
 # --------------------------------------------------------------------------------------------------------------------------------------------------------
 # Parameters
@@ -49,6 +75,12 @@ class InterpMethod(enum.IntEnum):
         return [
             F.InterpolationMode.NEAREST,
             F.InterpolationMode.BILINEAR,
+        ][self.value]
+
+    def to_cv2(self) -> int:
+        return [
+            cv2.INTER_NEAREST,
+            cv2.INTER_LINEAR,
         ][self.value]
 
 
@@ -166,18 +198,6 @@ class FFTVisualizer(docking_viewer.DockingViewer):
         self.base_img: torch.Tensor | None = None
 
         # ------------------------------------------------------------------------------------
-        # Set the device and data type based on the available hardware
-        if torch.cuda.is_available():
-            self.device = torch.device('cuda')
-            self.dtype = torch.float64
-        elif torch.backends.mps.is_available():
-            self.device = torch.device('mps')
-            self.dtype = torch.float32  # MPS does not support float64
-        else:
-            self.device = torch.device('cpu')
-            self.dtype = torch.float64
-
-        # ------------------------------------------------------------------------------------
         super().__init__(name, with_font_awesome=True, with_implot=True)
 
     def setup_state(self) -> None:
@@ -230,19 +250,19 @@ class FFTVisualizer(docking_viewer.DockingViewer):
         super_sampling_factor = self.params.super_sampling_factor if self.params.enable_super_sampling else 1
 
         if self.base_img is None or self.base_img.shape[0] != self.params.img_size:
-            # if self.params.img_mode == ImageMode.file and self.params.img_path.is_file():
-            #     img = cv2.imread(str(self.params.img_path), cv2.IMREAD_GRAYSCALE)
-            #     img = cv2.resize(img, (int(self.params.img_size * 1.5), int(self.params.img_size * 1.5)), interpolation=cv2.INTER_LANCZOS4)
-            #     img = cv2.flip(img, -1)
-            #     img = torch.from_numpy(img).to(self.dtype).to(self.device)
-            # else:
+            if self.params.img_mode == ImageMode.file and self.params.img_path.is_file():
+                super_sampled_size = int(self.params.img_size * 1.5 * super_sampling_factor)
+                img = cv2.imread(str(self.params.img_path), cv2.IMREAD_GRAYSCALE)
+                img = cv2.resize(img, (super_sampled_size, super_sampled_size), interpolation=InterpMethod(self.params.affine_interpolation_method).to_cv2())
+                img = cv2.flip(img, -1)
+                img = torch.from_numpy(img).to(_dtype).to(_device)
+            else:
+                canvas_size = math.floor(self.params.img_size * 1.5)  # Allocate larger canvas for the rotation
+                t = torch.linspace(0.0, canvas_size - 1, canvas_size * super_sampling_factor, dtype=_dtype, device=_device)
+                t = t - canvas_size // 2  # center the image
 
-            canvas_size = math.floor(self.params.img_size * 1.5)  # Allocate larger canvas for the rotation
-            t = torch.linspace(0.0, canvas_size - 1, canvas_size * super_sampling_factor, dtype=self.dtype, device=self.device)
-            t = t - canvas_size // 2  # center the image
-
-            x = torch.sin(2.0 * np.pi * target_freq * t)
-            img = torch.tile(x, (len(x), 1))
+                x = torch.sin(2.0 * np.pi * target_freq * t)
+                img = torch.tile(x, (len(x), 1))
 
             self.base_img = img.clone()
         else:
@@ -268,7 +288,7 @@ class FFTVisualizer(docking_viewer.DockingViewer):
             )
 
         img = F.center_crop(img, (self.params.img_size * super_sampling_factor, self.params.img_size * super_sampling_factor))
-        img = F.resize(img, size=(self.params.img_size, self.params.img_size), interpolation=InterpMethod(self.params.affine_interpolation_method).to_torch())
+        img = F.resize(img, size=(self.params.img_size, self.params.img_size), interpolation=InterpMethod(self.params.affine_interpolation_method).to_torch(), antialias=False)
         img = img.squeeze(0)
 
         # Images for visualization
@@ -317,8 +337,8 @@ class FFTVisualizer(docking_viewer.DockingViewer):
         # Compute the radial power spectrum density
         rad_psd = _module.calc_radial_psd_profile(
             psd.unsqueeze(0).unsqueeze(-1).contiguous(),  # [1, H, W, 1]
-            int(360 * 2),
-            int(1024)
+            _n_radial_divs,
+            _n_polar_divs,
         )  # [1, n_divs, n_points, 1]
 
         rad_psd = rad_psd.mean(dim=(0, 1, 3))  # [n_points,]
@@ -412,9 +432,11 @@ class FFTVisualizer(docking_viewer.DockingViewer):
 
             self.params.img_size = imgui.slider_int('Image size', self.params.img_size, 16, 1024)[1]
 
-            imgui.text('Wave number')
+            imgui.text('Wave number Slider')
             imgui.same_line()
             self.params.wave_number = imgui.slider_float('##Wave number slider', self.params.wave_number, 0.0, float(self.params.img_size))[1]
+
+            imgui.text('Wave number Input ')
             imgui.same_line()
             self.params.wave_number = imgui.input_float('##Wave number input', self.params.wave_number)[1]
 
@@ -479,4 +501,4 @@ class FFTVisualizer(docking_viewer.DockingViewer):
 
 if __name__ == '__main__':
     _ = FFTVisualizer('FFT')
-    print('Bye!')
+    logger.info('Bye!')
