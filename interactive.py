@@ -10,8 +10,8 @@ import matplotlib as mpl
 # Set Agg backend
 mpl.use('Agg')
 
-
 import cv2
+import nfdpy
 import numpy as np
 import pydantic.dataclasses as dataclasses
 import pyviewer.docking_viewer as docking_viewer
@@ -351,6 +351,15 @@ class FFTVisualizer(docking_viewer.DockingViewer):
 
         return self.state.img
 
+    def open_img_file_dialog(self) -> None:
+        """Open an image file dialog to select an image.
+        """
+
+        default_path = str(self.params.img_path) if self.params.img_path.is_file() else str(pathlib.Path.cwd())
+        img_path = nfdpy.open_file_dialog(filters={'Image file': 'png,jpg'}, default_path=default_path)
+        if img_path is not None:
+            self.params.img_path = pathlib.Path(img_path)
+
     @docking_viewer.dockable
     def toolbar(self) -> None:
         """Build the toolbar UI for the Color of Noise visualizer.
@@ -429,6 +438,9 @@ class FFTVisualizer(docking_viewer.DockingViewer):
             )[1]
 
             self.params.img_path = pathlib.Path(imgui.input_text('Image path', str(self.params.img_path))[1])
+            imgui.same_line()
+            if imgui.button('Open'):
+                self.open_img_file_dialog()
 
             self.params.img_size = imgui.slider_int('Image size', self.params.img_size, 16, 1024)[1]
 

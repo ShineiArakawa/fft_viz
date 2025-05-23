@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "nfdpy",
     "pyviewer",
     "research-utilities",
     "torchvision>=0.22.0",
@@ -13,6 +14,7 @@ dependencies = [
 [tool.uv.sources]
 research-utilities = { git = "https://github.com/ShineiArakawa/research-utilities.git", rev = "v1.1.10" }
 pyviewer = { git = "https://github.com/harskish/pyviewer.git" }
+nfdpy = { git = "https://github.com/ShineiArakawa/nfdpy.git" }
 
 [dependency-groups]
 dev = [
