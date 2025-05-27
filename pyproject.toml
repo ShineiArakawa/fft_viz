@@ -7,6 +7,7 @@ requires-python = ">=3.13"
 dependencies = [
     "nfdpy",
     "pyviewer",
+    "pyviewer-extended",
     "research-utilities",
     "torchvision>=0.22.0",
 ]
@@ -15,6 +16,7 @@ dependencies = [
 research-utilities = { git = "https://github.com/ShineiArakawa/research-utilities.git", rev = "v1.1.11" }
 pyviewer = { git = "https://github.com/harskish/pyviewer.git" }
 nfdpy = { git = "https://github.com/ShineiArakawa/nfdpy.git" }
+pyviewer-extended = { git = "https://github.com/ShineiArakawa/pyviewer-extended.git" }
 
 [dependency-groups]
 dev = ["scalene>=1.5.51"]

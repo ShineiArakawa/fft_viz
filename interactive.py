@@ -1,4 +1,6 @@
 # autopep8: off
+# isort: skip_file
+
 import copy
 import enum
 import math
@@ -10,15 +12,16 @@ import matplotlib as mpl
 # Set Agg backend
 mpl.use('Agg')
 
+import torch
+
 import cv2
 import nfdpy
 import numpy as np
 import pydantic.dataclasses as dataclasses
-import pyviewer.docking_viewer as docking_viewer
+import pyviewer_extended
 import research_utilities as rutils
 import research_utilities.signal as _signal
 import research_utilities.torch_util as _torch_util
-import torch
 import torchvision.transforms.v2.functional as F
 from imgui_bundle import imgui, implot
 
@@ -46,12 +49,6 @@ if cuda_enabled:
 
     _n_radial_divs = 360 * 2
     _n_polar_divs = 1024
-# elif torch.backends.mps.is_available():
-#     _device = torch.device('mps')
-#     _dtype = torch.float32
-
-#     _n_radial_divs = 32
-#     _n_polar_divs = 32
 else:
     _device = torch.device('cpu')
     _dtype = torch.float64
@@ -190,15 +187,23 @@ def to_cuda_device(x: torch.Tensor) -> torch.Tensor:
 # Viewer
 
 
-class FFTVisualizer(docking_viewer.DockingViewer):
+class FFTVisualizer(pyviewer_extended.MultiTextureDockingViewer):
     """Visualizer class for FFT
     """
+
+    # autopep8: off
+    KEY_INPUT        : typing.Final[str] = 'Input'
+    KEY_MASKED       : typing.Final[str] = 'Masked'
+    KEY_MASKED_INPUT : typing.Final[str] = 'Masked Input'
+    # autopep8: on
+
+    KEYS = [KEY_INPUT, KEY_MASKED, KEY_MASKED_INPUT]
 
     def __init__(self, name):
         self.base_img: torch.Tensor | None = None
 
         # ------------------------------------------------------------------------------------
-        super().__init__(name, with_font_awesome=True, with_implot=True)
+        super().__init__(name, self.KEYS, with_font_awesome=True, with_implot=True)
 
     def setup_state(self) -> None:
         """Initialize the state of the visualizer. Called by the super class.
@@ -208,6 +213,8 @@ class FFTVisualizer(docking_viewer.DockingViewer):
         self.state.prev_params = None
 
         self.state.img = None
+        self.state.window_img = None
+        self.state.windowed_img = None
         self.state.psd_img = None
 
         self.state.window = None
@@ -236,10 +243,14 @@ class FFTVisualizer(docking_viewer.DockingViewer):
 
         return 'viridis'
 
-    def compute(self) -> np.ndarray:
+    def compute(self) -> dict[str, np.ndarray]:
         # Check if the parameters have changed
         if self.state.prev_params is not None and self.state.prev_params == self.params:
-            return self.state.img
+            return {
+                self.KEY_INPUT: self.state.img,
+                self.KEY_MASKED: self.state.window_img,
+                self.KEY_MASKED_INPUT: self.state.windowed_img,
+            }
 
         # ---------------------------------------------------------------------------------------------------
         # Compute a sinusoidal image
@@ -261,6 +272,7 @@ class FFTVisualizer(docking_viewer.DockingViewer):
                 t = torch.linspace(0.0, canvas_size - 1, canvas_size * super_sampling_factor, dtype=_dtype, device=_device)
                 t = t - canvas_size // 2  # center the image
 
+                # x = 0.5 * torch.sin(2.0 * np.pi * target_freq * t) + 0.5  # [0, 1] range
                 x = torch.sin(2.0 * np.pi * target_freq * t)
                 img = torch.tile(x, (len(x), 1))
 
@@ -315,7 +327,15 @@ class FFTVisualizer(docking_viewer.DockingViewer):
 
             img = img * window_2d
 
+            # For visualization
+            window_2d_img = window_2d.cpu().unsqueeze(-1).tile(1, 1, 3).numpy().astype(np.float32)
+            window_2d_img = normalize_0_to_1(window_2d_img, based_on_min_max=True)
+
             self.state.window = np.ascontiguousarray(window.cpu().numpy().astype(np.float64))
+        else:
+            window_2d_img = np.ones((img.shape[-1], img.shape[-1], 3), dtype=np.float32)
+
+        self.state.window_img = np.ascontiguousarray(window_2d_img)
 
         if self.params.apply_padding:
             # Apply zero padding
@@ -323,6 +343,17 @@ class FFTVisualizer(docking_viewer.DockingViewer):
             padding = (self.params.img_size * self.params.padding_factor - self.params.img_size)
 
             img = torch.nn.functional.pad(img, (0, padding, 0, padding))
+
+        # For visualization
+        windowed_img = img.cpu().numpy().astype(np.float32)
+        windowed_img = normalize_0_to_1(windowed_img, based_on_min_max=True)
+        if self.img_cmap == 'gray':
+            windowed_img = np.expand_dims(windowed_img, axis=-1)
+            windowed_img = np.concatenate([windowed_img, windowed_img, windowed_img], axis=-1)
+        else:
+            windowed_img = rutils.apply_color_map(windowed_img, self.img_cmap)
+            windowed_img = cv2.cvtColor(windowed_img, cv2.COLOR_BGR2RGB)
+        self.state.windowed_img = np.ascontiguousarray(windowed_img)
 
         # Compute power spectrum density
         spectrum: torch.Tensor = torch.fft.fftn(img, dim=(-2, -1)).abs().square()
@@ -349,7 +380,11 @@ class FFTVisualizer(docking_viewer.DockingViewer):
         # Copy parameters
         self.state.prev_params = copy.deepcopy(self.params)
 
-        return self.state.img
+        return {
+            self.KEY_INPUT: self.state.img,
+            self.KEY_MASKED: self.state.window_img,
+            self.KEY_MASKED_INPUT: self.state.windowed_img,
+        }
 
     def open_img_file_dialog(self) -> None:
         """Open an image file dialog to select an image.
@@ -360,7 +395,7 @@ class FFTVisualizer(docking_viewer.DockingViewer):
         if img_path is not None:
             self.params.img_path = pathlib.Path(img_path)
 
-    @docking_viewer.dockable
+    @pyviewer_extended.dockable
     def toolbar(self) -> None:
         """Build the toolbar UI for the Color of Noise visualizer.
         """
