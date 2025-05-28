@@ -102,13 +102,13 @@ class Params:
     # autopep8: off
     img_mode                            : int          = int(ImageMode.sinusoidal)  # image mode
     img_path                            : pathlib.Path = pathlib.Path()             # image path
-    img_size                            : int          = 256                        # image size
+    img_size                            : int          = 128                        # image size
     enable_super_sampling               : bool         = False                      # enable super sampling
-    super_sampling_factor               : int          = 1                          # super sampling factor
+    super_sampling_factor               : int          = 4                          # super sampling factor
     enable_pre_filering                 : bool         = False                      # enable pre-filtering
     kernel_size                         : int          = 15                         # kernel size for pre-filtering
     kernel_sigma                        : float        = 0.3 * 6 + 0.8              # sigma for pre-filtering. See also: https://docs.pytorch.org/vision/main/generated/torchvision.transforms.functional.gaussian_blur.html
-    wave_number                         : float        = 50.0                       # wave number
+    wave_number                         : float        = 20.0                       # wave number
     rotate                              : float        = 0.0                        # rotation angle in degrees
     affine_interpolation_method         : int          = int(InterpMethod.nearest)  # interpolation method for the affine transformation
 
@@ -290,7 +290,6 @@ class FFTVisualizer(pyviewer_extended.MultiTextureDockingViewer):
             interpolation=InterpMethod(self.params.affine_interpolation_method).to_torch()
         )
 
-        # Center crop the image
         if self.params.enable_super_sampling and self.params.enable_pre_filering:
             # Prefilering
             img = F.gaussian_blur(
@@ -299,6 +298,7 @@ class FFTVisualizer(pyviewer_extended.MultiTextureDockingViewer):
                 sigma=(self.params.kernel_sigma, self.params.kernel_sigma)
             )
 
+        # Center crop the image
         img = F.center_crop(img, (self.params.img_size * super_sampling_factor, self.params.img_size * super_sampling_factor))
         img = F.resize(img, size=(self.params.img_size, self.params.img_size), interpolation=InterpMethod(self.params.affine_interpolation_method).to_torch(), antialias=False)
         img = img.squeeze(0)
@@ -316,7 +316,7 @@ class FFTVisualizer(pyviewer_extended.MultiTextureDockingViewer):
         self.state.img = np.ascontiguousarray(img_plot)
 
         # ---------------------------------------------------------------------------------------------------
-        # Compute the FFT
+        # Compute FFT
 
         if self.params.apply_windowing:
             # Apply the Kaiser window
