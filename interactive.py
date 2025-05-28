@@ -187,7 +187,7 @@ def to_cuda_device(x: torch.Tensor) -> torch.Tensor:
 # Viewer
 
 
-class FFTVisualizer(pyviewer_extended.MultiTextureDockingViewer):
+class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
     """Visualizer class for FFT
     """
 
