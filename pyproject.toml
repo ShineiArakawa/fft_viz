@@ -13,7 +13,7 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-research-utilities = { git = "https://github.com/ShineiArakawa/research-utilities.git", rev = "v1.1.11" }
+research-utilities = { git = "https://github.com/ShineiArakawa/research-utilities.git" }
 pyviewer = { git = "https://github.com/harskish/pyviewer.git" }
 nfdpy = { git = "https://github.com/ShineiArakawa/nfdpy.git" }
 pyviewer-extended = { git = "https://github.com/ShineiArakawa/pyviewer-extended.git" }

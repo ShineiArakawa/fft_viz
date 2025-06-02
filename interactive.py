@@ -106,6 +106,7 @@ class Params:
     enable_super_sampling               : bool         = False                      # enable super sampling
     super_sampling_factor               : int          = 4                          # super sampling factor
     enable_pre_filering                 : bool         = False                      # enable pre-filtering
+    pre_filter_padding                  : int          = 8                          # padding for pre-filtering
     kernel_size                         : int          = 15                         # kernel size for pre-filtering
     kernel_sigma                        : float        = 0.3 * 6 + 0.8              # sigma for pre-filtering. See also: https://docs.pytorch.org/vision/main/generated/torchvision.transforms.functional.gaussian_blur.html
     wave_number                         : float        = 20.0                       # wave number
@@ -122,11 +123,20 @@ class Params:
     # autopep8: on
 
 
+@dataclasses.dataclass(config=dataclasses.ConfigDict(arbitrary_types_allowed=True))
+class ImageFile:
+
+    img: np.ndarray
+    file_path: pathlib.Path
+
 # --------------------------------------------------------------------------------------------------------------------------------------------------------
 # utilities
 
 
-def normalize_0_to_1(x: np.ndarray, based_on_min_max: bool = False) -> np.ndarray:
+ArrayLike = typing.TypeVar('ArrayLike', np.ndarray, torch.Tensor)
+
+
+def normalize_0_to_1(x: ArrayLike, based_on_min_max: bool = False) -> ArrayLike:
     """Normalize the input array to the range [0, 1].
 
     Parameters
@@ -147,21 +157,39 @@ def normalize_0_to_1(x: np.ndarray, based_on_min_max: bool = False) -> np.ndarra
         If the input array is not 2D or 3D.
     """
 
+    if isinstance(x, np.ndarray):
+        if based_on_min_max:
+            if x.ndim == 3:
+                min = np.min(x, axis=(0, 1), keepdims=True)
+                max = np.max(x, axis=(0, 1), keepdims=True)
+            elif x.ndim == 2:
+                min = np.min(x)
+                max = np.max(x)
+            else:
+                raise ValueError("Input array must be 2D or 3D.")
+        else:
+            # [-1, 1] -> [0, 1]
+            min = -1.0
+            max = 1.0
+
+        return np.clip((x - min) / (max - min + 1e-8), 0.0, 1.0)
+
     if based_on_min_max:
         if x.ndim == 3:
-            min = np.min(x, axis=(0, 1), keepdims=True)
-            max = np.max(x, axis=(0, 1), keepdims=True)
+            flattend = x.reshape(-1, x.shape[-1])
+            min = flattend.min(dim=0, keepdim=True).values.unsqueeze(0)
+            max = flattend.max(dim=0, keepdim=True).values.unsqueeze(0)
         elif x.ndim == 2:
-            min = np.min(x)
-            max = np.max(x)
+            min = torch.min(x)
+            max = torch.max(x)
         else:
-            raise ValueError("Input array must be 2D or 3D.")
+            raise ValueError("Input tensor must be 2D or 3D.")
     else:
         # [-1, 1] -> [0, 1]
         min = -1.0
         max = 1.0
 
-    return np.clip((x - min) / (max - min + 1e-8), 0.0, 1.0)
+    return torch.clamp((x - min) / (max - min + 1e-8), 0.0, 1.0)
 
 
 def to_cuda_device(x: torch.Tensor) -> torch.Tensor:
@@ -200,7 +228,7 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
     KEYS = [KEY_INPUT, KEY_MASKED, KEY_MASKED_INPUT]
 
     def __init__(self, name):
-        self.base_img: torch.Tensor | None = None
+        self.base_img: ImageFile | None = None
 
         # ------------------------------------------------------------------------------------
         super().__init__(name, self.KEYS, with_font_awesome=True, with_implot=True)
@@ -260,25 +288,25 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
 
         super_sampling_factor = self.params.super_sampling_factor if self.params.enable_super_sampling else 1
 
-        if self.base_img is None or self.base_img.shape[0] != self.params.img_size:
-            if self.params.img_mode == ImageMode.file and self.params.img_path.is_file():
-                super_sampled_size = int(self.params.img_size * 1.5 * super_sampling_factor)
+        if self.params.img_mode == ImageMode.file and self.params.img_path.is_file():
+            if self.base_img is None or self.base_img.file_path != self.params.img_path:
                 img = cv2.imread(str(self.params.img_path), cv2.IMREAD_GRAYSCALE)
-                img = cv2.resize(img, (super_sampled_size, super_sampled_size), interpolation=InterpMethod(self.params.affine_interpolation_method).to_cv2())
-                img = cv2.flip(img, -1)
-                img = torch.from_numpy(img).to(_dtype).to(_device)
+                self.base_img = ImageFile(img=img, file_path=self.params.img_path)
             else:
-                canvas_size = math.floor(self.params.img_size * 1.5)  # Allocate larger canvas for the rotation
-                t = torch.linspace(0.0, canvas_size - 1, canvas_size * super_sampling_factor, dtype=_dtype, device=_device)
-                t = t - canvas_size // 2  # center the image
+                img = self.base_img.img
 
-                # x = 0.5 * torch.sin(2.0 * np.pi * target_freq * t) + 0.5  # [0, 1] range
-                x = torch.sin(2.0 * np.pi * target_freq * t)
-                img = torch.tile(x, (len(x), 1))
-
-            self.base_img = img.clone()
+            super_sampled_size = int(self.params.img_size * 1.5 * super_sampling_factor)
+            img = cv2.flip(img, -1)
+            img = torch.from_numpy(img).to(_dtype).to(_device)
+            img = F.resize(img.unsqueeze(0), size=(super_sampled_size, super_sampled_size), interpolation=InterpMethod(self.params.affine_interpolation_method).to_torch(), antialias=False).squeeze(0)
         else:
-            img = self.base_img.clone()
+            canvas_size = math.floor(self.params.img_size * 1.5)  # Allocate larger canvas for the rotation
+            t = torch.linspace(0.0, canvas_size - 1, canvas_size * super_sampling_factor, dtype=_dtype, device=_device)
+            t = t - canvas_size // 2  # center the image
+
+            # x = 0.5 * torch.sin(2.0 * np.pi * target_freq * t) + 0.5  # [0, 1] range
+            x = torch.sin(2.0 * np.pi * target_freq * t)
+            img = torch.tile(x, (len(x), 1))
 
         # Rotate the image
         img = F.affine(
@@ -290,13 +318,22 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
             interpolation=InterpMethod(self.params.affine_interpolation_method).to_torch()
         )
 
-        if self.params.enable_super_sampling and self.params.enable_pre_filering:
+        if self.params.enable_pre_filering:
             # Prefilering
+            # Pad the image to avoid edge artifacts
+            pad_size = self.params.pre_filter_padding
+            img = F.pad_image(img, padding=(pad_size, pad_size, pad_size, pad_size), padding_mode='reflect')
+
+            # Apply Gaussian blur
             img = F.gaussian_blur(
                 img,
                 kernel_size=(self.params.kernel_size, self.params.kernel_size),
                 sigma=(self.params.kernel_sigma, self.params.kernel_sigma)
             )
+
+            # Remove the padding
+            if pad_size > 0:
+                img = img[:, pad_size:-pad_size, pad_size:-pad_size]
 
         # Center crop the image
         img = F.center_crop(img, (self.params.img_size * super_sampling_factor, self.params.img_size * super_sampling_factor))
@@ -304,16 +341,14 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         img = img.squeeze(0)
 
         # Images for visualization
-        img_plot = img.cpu().numpy().astype(np.float32)
+        img_plot = img.detach().clone().to(torch.float32)
         img_plot = normalize_0_to_1(img_plot, based_on_min_max=True)
         if self.img_cmap == 'gray':
-            img_plot = np.expand_dims(img_plot, axis=-1)
-            img_plot = np.concatenate([img_plot, img_plot, img_plot], axis=-1)
+            img_plot = torch.stack([img_plot, img_plot, img_plot], dim=-1)
         else:
             img_plot = rutils.apply_color_map(img_plot, self.img_cmap)
-            img_plot = cv2.cvtColor(img_plot, cv2.COLOR_BGR2RGB)
 
-        self.state.img = np.ascontiguousarray(img_plot)
+        self.state.img = img_plot
 
         # ---------------------------------------------------------------------------------------------------
         # Compute FFT
@@ -328,14 +363,14 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
             img = img * window_2d
 
             # For visualization
-            window_2d_img = window_2d.cpu().unsqueeze(-1).tile(1, 1, 3).numpy().astype(np.float32)
+            window_2d_img = window_2d.detach().clone().unsqueeze(-1).tile(1, 1, 3).to(torch.float32)
             window_2d_img = normalize_0_to_1(window_2d_img, based_on_min_max=True)
 
             self.state.window = np.ascontiguousarray(window.cpu().numpy().astype(np.float64))
         else:
-            window_2d_img = np.ones((img.shape[-1], img.shape[-1], 3), dtype=np.float32)
+            window_2d_img = torch.ones((img.shape[-1], img.shape[-1], 3), dtype=torch.float32, device=_device)
 
-        self.state.window_img = np.ascontiguousarray(window_2d_img)
+        self.state.window_img = window_2d_img
 
         if self.params.apply_padding:
             # Apply zero padding
@@ -345,15 +380,13 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
             img = torch.nn.functional.pad(img, (0, padding, 0, padding))
 
         # For visualization
-        windowed_img = img.cpu().numpy().astype(np.float32)
+        windowed_img = img.detach().clone().to(dtype=torch.float32, device=_device)
         windowed_img = normalize_0_to_1(windowed_img, based_on_min_max=True)
         if self.img_cmap == 'gray':
-            windowed_img = np.expand_dims(windowed_img, axis=-1)
-            windowed_img = np.concatenate([windowed_img, windowed_img, windowed_img], axis=-1)
+            windowed_img = torch.stack([windowed_img, windowed_img, windowed_img], dim=-1)
         else:
             windowed_img = rutils.apply_color_map(windowed_img, self.img_cmap)
-            windowed_img = cv2.cvtColor(windowed_img, cv2.COLOR_BGR2RGB)
-        self.state.windowed_img = np.ascontiguousarray(windowed_img)
+        self.state.windowed_img = windowed_img
 
         # Compute power spectrum density
         spectrum: torch.Tensor = torch.fft.fftn(img, dim=(-2, -1)).abs().square()
@@ -466,33 +499,40 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         # ---------------------------------------------------------------------------------------------------
         # Parameters for the noise
         if imgui.collapsing_header('Input', flags=imgui.TreeNodeFlags_.default_open):
+            imgui.separator_text('Image')
+
             self.params.img_mode = imgui.combo(
                 'Image mode',
                 self.params.img_mode,
                 [m.name for m in ImageMode],
             )[1]
 
-            self.params.img_path = pathlib.Path(imgui.input_text('Image path', str(self.params.img_path))[1])
-            imgui.same_line()
-            if imgui.button('Open'):
-                self.open_img_file_dialog()
+            if self.params.img_mode == ImageMode.sinusoidal:
+                imgui.text('Wave number Slider')
+                imgui.same_line()
+                self.params.wave_number = imgui.slider_float('##Wave number slider', self.params.wave_number, 0.0, float(self.params.img_size))[1]
+
+                imgui.text('Wave number Input ')
+                imgui.same_line()
+                self.params.wave_number = imgui.input_float('##Wave number input', self.params.wave_number)[1]
+            else:
+                self.params.img_path = pathlib.Path(imgui.input_text('Image path', str(self.params.img_path))[1])
+                imgui.same_line()
+                if imgui.button('Open'):
+                    self.open_img_file_dialog()
 
             self.params.img_size = imgui.slider_int('Image size', self.params.img_size, 16, 1024)[1]
 
-            imgui.text('Wave number Slider')
-            imgui.same_line()
-            self.params.wave_number = imgui.slider_float('##Wave number slider', self.params.wave_number, 0.0, float(self.params.img_size))[1]
-
-            imgui.text('Wave number Input ')
-            imgui.same_line()
-            self.params.wave_number = imgui.input_float('##Wave number input', self.params.wave_number)[1]
-
+            imgui.separator_text('Geometric transformation')
             self.params.rotate = imgui.slider_float('Rotation angle', self.params.rotate, 0.0, 360.0)[1]
 
+            imgui.separator_text('Super sampling')
             self.params.enable_super_sampling = imgui.checkbox('Enable super sampling', self.params.enable_super_sampling)[1]
             self.params.super_sampling_factor = imgui.slider_int('Super sampling factor', self.params.super_sampling_factor, 1, 4)[1]
 
+            imgui.separator_text('Pre-filtering')
             self.params.enable_pre_filering = imgui.checkbox('Enable pre-filtering', self.params.enable_pre_filering)[1]
+            self.params.pre_filter_padding = imgui.slider_int('Padding (reflection)', self.params.pre_filter_padding, 0, 32)[1]
             kernel_size = imgui.slider_int('Kernel size', self.params.kernel_size, 3, 31)[1]
             self.params.kernel_size = kernel_size + 1 if kernel_size % 2 == 0 else kernel_size
             self.params.kernel_sigma = imgui.slider_float('Kernel sigma', self.params.kernel_sigma, 0.01, 10.0)[1]
