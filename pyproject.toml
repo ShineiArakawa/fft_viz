@@ -1,7 +1,7 @@
 [project]
 name = "fft-viz"
-version = "0.2.0"
-description = "Add your description here"
+version = "0.3.0"
+description = "High-quality FFT visualization tool"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -13,10 +13,10 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-research-utilities = { git = "https://github.com/ShineiArakawa/research-utilities.git" }
+research-utilities = { git = "https://github.com/ShineiArakawa/research-utilities.git", tag = "v1.1.13" }
 pyviewer = { git = "https://github.com/harskish/pyviewer.git" }
 nfdpy = { git = "https://github.com/ShineiArakawa/nfdpy.git" }
-pyviewer-extended = { git = "https://github.com/ShineiArakawa/pyviewer-extended.git" }
+pyviewer-extended = { git = "https://github.com/ShineiArakawa/pyviewer-extended.git", tag = "v0.1.3" }
 
 [dependency-groups]
 dev = ["scalene>=1.5.51"]

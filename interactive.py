@@ -286,21 +286,23 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         wave_number = self.params.wave_number
         target_freq = wave_number / self.params.img_size  # [cycles/pixel]
 
-        super_sampling_factor = self.params.super_sampling_factor if self.params.enable_super_sampling else 1
-
         if self.params.img_mode == ImageMode.file and self.params.img_path.is_file():
+            super_sampling_factor = 1  # disable super sampling for file images
+            mag_factor = 1.0  # no magnification for file images
+
             if self.base_img is None or self.base_img.file_path != self.params.img_path:
                 img = cv2.imread(str(self.params.img_path), cv2.IMREAD_GRAYSCALE)
                 self.base_img = ImageFile(img=img, file_path=self.params.img_path)
             else:
                 img = self.base_img.img
 
-            super_sampled_size = int(self.params.img_size * 1.5 * super_sampling_factor)
             img = cv2.flip(img, -1)
             img = torch.from_numpy(img).to(_dtype).to(_device)
-            img = F.resize(img.unsqueeze(0), size=(super_sampled_size, super_sampled_size), interpolation=InterpMethod(self.params.affine_interpolation_method).to_torch(), antialias=False).squeeze(0)
         else:
-            canvas_size = math.floor(self.params.img_size * 1.5)  # Allocate larger canvas for the rotation
+            super_sampling_factor = self.params.super_sampling_factor if self.params.enable_super_sampling else 1
+            mag_factor = 1.5
+
+            canvas_size = math.floor(self.params.img_size * mag_factor)  # Allocate larger canvas for the rotation
             t = torch.linspace(0.0, canvas_size - 1, canvas_size * super_sampling_factor, dtype=_dtype, device=_device)
             t = t - canvas_size // 2  # center the image
 
@@ -527,8 +529,11 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
             self.params.rotate = imgui.slider_float('Rotation angle', self.params.rotate, 0.0, 360.0)[1]
 
             imgui.separator_text('Super sampling')
-            self.params.enable_super_sampling = imgui.checkbox('Enable super sampling', self.params.enable_super_sampling)[1]
-            self.params.super_sampling_factor = imgui.slider_int('Super sampling factor', self.params.super_sampling_factor, 1, 4)[1]
+            if self.params.img_mode != ImageMode.file:
+                self.params.enable_super_sampling = imgui.checkbox('Enable super sampling', self.params.enable_super_sampling)[1]
+                self.params.super_sampling_factor = imgui.slider_int('Super sampling factor', self.params.super_sampling_factor, 1, 4)[1]
+            else:
+                imgui.text('Super sampling is disabled for file images')
 
             imgui.separator_text('Pre-filtering')
             self.params.enable_pre_filering = imgui.checkbox('Enable pre-filtering', self.params.enable_pre_filering)[1]
