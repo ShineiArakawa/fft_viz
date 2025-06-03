@@ -3,7 +3,6 @@
 
 import copy
 import enum
-import math
 import pathlib
 import typing
 
