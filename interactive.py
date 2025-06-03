@@ -53,8 +53,8 @@ else:
     _device = torch.device('cpu')
     _dtype = torch.float64
 
-    _n_radial_divs = 32
-    _n_polar_divs = 32
+    _n_radial_divs = 64
+    _n_polar_divs = 64
 
 logger.info(f'Using device: {_device}, dtype: {_dtype}')
 
@@ -126,7 +126,7 @@ class Params:
 @dataclasses.dataclass(config=dataclasses.ConfigDict(arbitrary_types_allowed=True))
 class ImageFile:
 
-    img: np.ndarray
+    img: torch.Tensor
     file_path: pathlib.Path
 
 # --------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -292,15 +292,13 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
 
             if self.base_img is None or self.base_img.file_path != self.params.img_path:
                 img = cv2.imread(str(self.params.img_path), cv2.IMREAD_GRAYSCALE)
-                self.base_img = ImageFile(img=img, file_path=self.params.img_path)
-            else:
-                img = self.base_img.img
+                img = cv2.flip(img, -1)
+                self.base_img = ImageFile(img=torch.tensor(img).to(dtype=_dtype, device=_device), file_path=self.params.img_path)
 
-            img = cv2.flip(img, -1)
-            img = torch.from_numpy(img).to(_dtype).to(_device)
+            img = self.base_img.img
         else:
             super_sampling_factor = self.params.super_sampling_factor if self.params.enable_super_sampling else 1
-            mag_factor = 1.5
+            mag_factor = 1.6
 
             canvas_size = math.floor(self.params.img_size * mag_factor)  # Allocate larger canvas for the rotation
             t = torch.linspace(0.0, canvas_size - 1, canvas_size * super_sampling_factor, dtype=_dtype, device=_device)
@@ -310,9 +308,12 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
             x = torch.sin(2.0 * np.pi * target_freq * t)
             img = torch.tile(x, (len(x), 1))
 
+        # Add batch dimension
+        img = img.unsqueeze(0)
+
         # Rotate the image
         img = F.affine(
-            img.unsqueeze(0),
+            img,
             angle=(self.params.rotate - 180.0),
             translate=(0.0, 0.0),
             scale=1.0,
