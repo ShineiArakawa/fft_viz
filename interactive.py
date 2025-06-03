@@ -49,12 +49,16 @@ if cuda_enabled:
 
     _n_radial_divs = 360 * 2
     _n_polar_divs = 1024
+
+    DEFAULT_IMG_SIZE = 256
 else:
     _device = torch.device('cpu')
     _dtype = torch.float64
 
     _n_radial_divs = 64
     _n_polar_divs = 64
+
+    DEFAULT_IMG_SIZE = 128
 
 logger.info(f'Using device: {_device}, dtype: {_dtype}')
 
@@ -93,6 +97,9 @@ class ImageMode(enum.IntEnum):
 
 MPL_CMAPS: typing.Final[list[str]] = ['viridis', 'plasma', 'inferno', 'magma', 'cividis', 'gray']
 
+EXAMPLE_IMG_PATH: typing.Final[pathlib.Path] = pathlib.Path(__file__).parent / 'example_imgs' / 'checkerboard_1024.png'
+DEFAULT_IMG_PATH: typing.Final[pathlib.Path] = EXAMPLE_IMG_PATH if EXAMPLE_IMG_PATH.is_file() else pathlib.Path()
+
 
 @dataclasses.dataclass
 class Params:
@@ -100,26 +107,26 @@ class Params:
     """
 
     # autopep8: off
-    img_mode                            : int          = int(ImageMode.sinusoidal)  # image mode
-    img_path                            : pathlib.Path = pathlib.Path()             # image path
-    img_size                            : int          = 128                        # image size
-    enable_super_sampling               : bool         = False                      # enable super sampling
-    super_sampling_factor               : int          = 4                          # super sampling factor
-    enable_pre_filering                 : bool         = False                      # enable pre-filtering
-    pre_filter_padding                  : int          = 8                          # padding for pre-filtering
-    kernel_size                         : int          = 15                         # kernel size for pre-filtering
-    kernel_sigma                        : float        = 0.3 * 6 + 0.8              # sigma for pre-filtering. See also: https://docs.pytorch.org/vision/main/generated/torchvision.transforms.functional.gaussian_blur.html
-    wave_number                         : float        = 20.0                       # wave number
-    rotate                              : float        = 0.0                        # rotation angle in degrees
-    affine_interpolation_method         : int          = int(InterpMethod.nearest)  # interpolation method for the affine transformation
+    img_mode                            : int          = int(ImageMode.sinusoidal)                                              # image mode
+    img_path                            : pathlib.Path = DEFAULT_IMG_PATH                                                       # image path (Default is a FFHQ image)
+    img_size                            : int          = DEFAULT_IMG_SIZE                                                       # image size
+    enable_super_sampling               : bool         = False                                                                  # enable super sampling
+    super_sampling_factor               : int          = 4                                                                      # super sampling factor
+    enable_pre_filering                 : bool         = False                                                                  # enable pre-filtering
+    pre_filter_padding                  : int          = 8                                                                      # padding for pre-filtering
+    kernel_size                         : int          = 15                                                                     # kernel size for pre-filtering
+    kernel_sigma                        : float        = 0.3 * 6 + 0.8                                                          # sigma for pre-filtering. See also: https://docs.pytorch.org/vision/main/generated/torchvision.transforms.functional.gaussian_blur.html
+    wave_number                         : float        = 20.0                                                                   # wave number
+    rotate                              : float        = 0.0                                                                    # rotation angle in degrees
+    affine_interpolation_method         : int          = int(InterpMethod.nearest)                                              # interpolation method for the affine transformation
 
-    apply_windowing                     : bool         = False                      # apply windowing to the image
-    beta                                : float        = 8.0                        # beta parameter for the kaiser window
-    apply_padding                       : bool         = False                      # apply zero padding to the image
-    padding_factor                      : int          = 4                          # padding factor for the FFT
+    apply_windowing                     : bool         = False                                                                  # apply windowing to the image
+    beta                                : float        = 8.0                                                                    # beta parameter for the kaiser window
+    apply_padding                       : bool         = False                                                                  # apply zero padding to the image
+    padding_factor                      : int          = 4                                                                      # padding factor for the FFT
 
-    img_cmap_id                         : int          = 5                          # color map ID for the sinusoidal image, by default 'gray'
-    psd_cmap_id                         : int          = 1                          # color map ID for the power spectrum density, by default 'plasma'
+    img_cmap_id                         : int          = 5                                                                      # color map ID for the sinusoidal image, by default 'gray'
+    psd_cmap_id                         : int          = 1                                                                      # color map ID for the power spectrum density, by default 'plasma'
     # autopep8: on
 
 
@@ -129,9 +136,9 @@ class ImageFile:
     img: torch.Tensor
     file_path: pathlib.Path
 
+
 # --------------------------------------------------------------------------------------------------------------------------------------------------------
 # utilities
-
 
 ArrayLike = typing.TypeVar('ArrayLike', np.ndarray, torch.Tensor)
 
@@ -298,13 +305,18 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
             img = self.base_img.img
         else:
             super_sampling_factor = self.params.super_sampling_factor if self.params.enable_super_sampling else 1
-            mag_factor = 1.6
+            mag_factor = 2  # sqrt(2) is enough, but we need integer factor for the canvas size
 
-            canvas_size = math.floor(self.params.img_size * mag_factor)  # Allocate larger canvas for the rotation
-            t = torch.linspace(0.0, canvas_size - 1, canvas_size * super_sampling_factor, dtype=_dtype, device=_device)
-            t = t - canvas_size // 2  # center the image
+            # Allocate larger canvas for the rotation
+            canvas_size = self.params.img_size * mag_factor
 
-            # x = 0.5 * torch.sin(2.0 * np.pi * target_freq * t) + 0.5  # [0, 1] range
+            n_pixels = canvas_size * super_sampling_factor
+            w = 1.0 / (super_sampling_factor * 2.0)
+            m = 0.5 - w
+
+            t = torch.linspace(0.0 - m, canvas_size - 1.0 + m, n_pixels, dtype=_dtype, device=_device)
+
+            # x = 0.5 * torch.sin(2.0 * np.pi * target_freq * t) + 0.5  # [0, 1] range and has a non-zero DC component
             x = torch.sin(2.0 * np.pi * target_freq * t)
             img = torch.tile(x, (len(x), 1))
 
@@ -340,7 +352,7 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
 
         # Center crop the image
         img = F.center_crop(img, (self.params.img_size * super_sampling_factor, self.params.img_size * super_sampling_factor))
-        img = F.resize(img, size=(self.params.img_size, self.params.img_size), interpolation=InterpMethod(self.params.affine_interpolation_method).to_torch(), antialias=False)
+        img = F.resize(img, size=(self.params.img_size, self.params.img_size), interpolation=F.InterpolationMode.NEAREST, antialias=False)
         img = img.squeeze(0)
 
         # Images for visualization
