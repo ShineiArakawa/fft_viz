@@ -117,7 +117,7 @@ class Params:
     kernel_sigma                        : float        = 0.3 * 6 + 0.8                                                          # sigma for pre-filtering. See also: https://docs.pytorch.org/vision/main/generated/torchvision.transforms.functional.gaussian_blur.html
     wave_number                         : float        = 20.0                                                                   # wave number
     rotate                              : float        = 0.0                                                                    # rotation angle in degrees
-    affine_interpolation_method         : int          = int(InterpMethod.nearest)                                              # interpolation method for the affine transformation
+    affine_interpolation_method         : int          = int(InterpMethod.bilinear)                                             # interpolation method for the affine transformation
 
     apply_windowing                     : bool         = False                                                                  # apply windowing to the image
     beta                                : float        = 8.0                                                                    # beta parameter for the kaiser window
