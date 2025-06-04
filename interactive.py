@@ -1,22 +1,18 @@
-# autopep8: off
 # isort: skip_file
-
+# autopep8: off
 import copy
 import enum
+import math
 import pathlib
 import typing
 
-import matplotlib as mpl
-
-# Set Agg backend
-mpl.use('Agg')
-
+# NOTE: Make sure to import PyTorch before importing PyViewer-extended
 import torch
 
 import cv2
 import nfdpy
 import numpy as np
-import pydantic.dataclasses as dataclasses
+import pydantic
 import pyviewer_extended
 import research_utilities as rutils
 import research_utilities.signal as _signal
@@ -24,6 +20,8 @@ import research_utilities.torch_util as _torch_util
 import torchvision.transforms.v2.functional as F
 from imgui_bundle import imgui, implot
 
+import util
+import windowing
 # autopep8: on
 
 logger = rutils.get_logger()
@@ -60,6 +58,7 @@ else:
     DEFAULT_IMG_SIZE = 128
 
 logger.info(f'Using device: {_device}, dtype: {_dtype}')
+
 
 # --------------------------------------------------------------------------------------------------------------------------------------------------------
 # Parameters
@@ -100,7 +99,7 @@ EXAMPLE_IMG_PATH: typing.Final[pathlib.Path] = pathlib.Path(__file__).parent / '
 DEFAULT_IMG_PATH: typing.Final[pathlib.Path] = EXAMPLE_IMG_PATH if EXAMPLE_IMG_PATH.is_file() else pathlib.Path()
 
 
-@dataclasses.dataclass
+@pydantic.dataclasses.dataclass(config=pydantic.config.ConfigDict(arbitrary_types_allowed=True))
 class Params:
     """Parameters for the Color of Noise visualizer.
     """
@@ -117,85 +116,31 @@ class Params:
     kernel_sigma                        : float        = 0.3 * 6 + 0.8                                                          # sigma for pre-filtering. See also: https://docs.pytorch.org/vision/main/generated/torchvision.transforms.functional.gaussian_blur.html
     wave_number                         : float        = 20.0                                                                   # wave number
     rotate                              : float        = 0.0                                                                    # rotation angle in degrees
-    affine_interpolation_method         : int          = int(InterpMethod.bilinear)                                             # interpolation method for the affine transformation
 
-    apply_windowing                     : bool         = False                                                                  # apply windowing to the image
-    beta                                : float        = 8.0                                                                    # beta parameter for the kaiser window
+    window_func                         : int          = 0                                                                      # windowing function
     apply_padding                       : bool         = False                                                                  # apply zero padding to the image
     padding_factor                      : int          = 4                                                                      # padding factor for the FFT
 
     img_cmap_id                         : int          = 5                                                                      # color map ID for the sinusoidal image, by default 'gray'
     psd_cmap_id                         : int          = 1                                                                      # color map ID for the power spectrum density, by default 'plasma'
+
+    windowfn_instances                  : dict[str, windowing.WindowFunctionBase] = pydantic.Field(default_factory=dict)        # window functions, instantiated in the __post_init__ method
     # autopep8: on
 
+    def __post_init__(self):
+        # Instantiate all the window functions
+        for name, cls in windowing._window_funcs.items():
+            self.windowfn_instances[name] = cls()
 
-@dataclasses.dataclass(config=dataclasses.ConfigDict(arbitrary_types_allowed=True))
+
+@pydantic.dataclasses.dataclass(config=pydantic.dataclasses.ConfigDict(arbitrary_types_allowed=True))
 class ImageFile:
-
     img: torch.Tensor
     file_path: pathlib.Path
 
 
 # --------------------------------------------------------------------------------------------------------------------------------------------------------
 # utilities
-
-ArrayLike = typing.TypeVar('ArrayLike', np.ndarray, torch.Tensor)
-
-
-def normalize_0_to_1(x: ArrayLike, based_on_min_max: bool = False) -> ArrayLike:
-    """Normalize the input array to the range [0, 1].
-
-    Parameters
-    ----------
-    x : np.ndarray
-        Input array to be normalized.
-    based_on_min_max : bool, optional
-        If True, the normalization is based on the min and max values of the input array. If False, the normalization is based on the range [-1, 1]. Default is False.
-
-    Returns
-    -------
-    np.ndarray
-        Normalized array in the range [0, 1].
-
-    Raises
-    ------
-    ValueError
-        If the input array is not 2D or 3D.
-    """
-
-    if isinstance(x, np.ndarray):
-        if based_on_min_max:
-            if x.ndim == 3:
-                min = np.min(x, axis=(0, 1), keepdims=True)
-                max = np.max(x, axis=(0, 1), keepdims=True)
-            elif x.ndim == 2:
-                min = np.min(x)
-                max = np.max(x)
-            else:
-                raise ValueError("Input array must be 2D or 3D.")
-        else:
-            # [-1, 1] -> [0, 1]
-            min = -1.0
-            max = 1.0
-
-        return np.clip((x - min) / (max - min + 1e-8), 0.0, 1.0)
-
-    if based_on_min_max:
-        if x.ndim == 3:
-            flattend = x.reshape(-1, x.shape[-1])
-            min = flattend.min(dim=0, keepdim=True).values.unsqueeze(0)
-            max = flattend.max(dim=0, keepdim=True).values.unsqueeze(0)
-        elif x.ndim == 2:
-            min = torch.min(x)
-            max = torch.max(x)
-        else:
-            raise ValueError("Input tensor must be 2D or 3D.")
-    else:
-        # [-1, 1] -> [0, 1]
-        min = -1.0
-        max = 1.0
-
-    return torch.clamp((x - min) / (max - min + 1e-8), 0.0, 1.0)
 
 
 def to_cuda_device(x: torch.Tensor) -> torch.Tensor:
@@ -294,7 +239,6 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
 
         if self.params.img_mode == ImageMode.file and self.params.img_path.is_file():
             super_sampling_factor = 1  # disable super sampling for file images
-            mag_factor = 1.0  # no magnification for file images
 
             if self.base_img is None or self.base_img.file_path != self.params.img_path:
                 img = cv2.imread(str(self.params.img_path), cv2.IMREAD_GRAYSCALE)
@@ -304,33 +248,31 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
             img = self.base_img.img
         else:
             super_sampling_factor = self.params.super_sampling_factor if self.params.enable_super_sampling else 1
-            mag_factor = 2  # sqrt(2) is enough, but we need integer factor for the canvas size
 
             # Allocate larger canvas for the rotation
-            canvas_size = self.params.img_size * mag_factor
+            canvas_size = self.params.img_size
 
             n_pixels = canvas_size * super_sampling_factor
             w = 1.0 / (super_sampling_factor * 2.0)
             m = 0.5 - w
 
             t = torch.linspace(0.0 - m, canvas_size - 1.0 + m, n_pixels, dtype=_dtype, device=_device)
+            t = t - t.mean()  # Center the grid around zero
+            grid = torch.stack(torch.meshgrid(t, t, indexing='ij'), dim=-1)  # [n_pixels, n_pixels, 2]
 
-            # x = 0.5 * torch.sin(2.0 * np.pi * target_freq * t) + 0.5  # [0, 1] range and has a non-zero DC component
-            x = torch.sin(2.0 * np.pi * target_freq * t)
-            img = torch.tile(x, (len(x), 1))
+            rad_angle = math.pi * self.params.rotate / 180.0
+            rot_mat = torch.tensor([
+                [math.cos(rad_angle), -math.sin(rad_angle)],
+                [math.sin(rad_angle), math.cos(rad_angle)]
+            ], dtype=_dtype, device=_device)  # [2, 2]
+
+            grid = torch.einsum('ij,...j->...i', rot_mat, grid)  # [n_pixels, n_pixels, 2]
+
+            x = torch.sin(2.0 * np.pi * target_freq * grid)
+            img = x[..., 1]  # [n_pixels, n_pixels]
 
         # Add batch dimension
         img = img.unsqueeze(0)
-
-        # Rotate the image
-        img = F.affine(
-            img,
-            angle=(self.params.rotate - 180.0),
-            translate=(0.0, 0.0),
-            scale=1.0,
-            shear=(0.0, 0.0),
-            interpolation=InterpMethod(self.params.affine_interpolation_method).to_torch()
-        )
 
         if self.params.enable_pre_filering:
             # Prefilering
@@ -356,7 +298,7 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
 
         # Images for visualization
         img_plot = img.detach().clone().to(torch.float32)
-        img_plot = normalize_0_to_1(img_plot, based_on_min_max=True)
+        img_plot = util.normalize_0_to_1(img_plot, based_on_min_max=True)
         if self.img_cmap == 'gray':
             img_plot = torch.stack([img_plot, img_plot, img_plot], dim=-1)
         else:
@@ -367,23 +309,20 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         # ---------------------------------------------------------------------------------------------------
         # Compute FFT
 
-        if self.params.apply_windowing:
-            # Apply the Kaiser window
-            window = torch.kaiser_window(img.shape[-1], periodic=False, beta=self.params.beta, dtype=img.dtype, device=img.device)
-            window *= window.square().sum().rsqrt()
+        # Apply windowing
+        window_name = windowing._window_func_names[self.params.window_func]
+        window_func = self.params.windowfn_instances[window_name]
 
-            window_2d = torch.ger(window, window)  # [short_side, short_side]
+        window = window_func.calc_window(img.shape[-1], dtype=img.dtype, device=img.device)
+        window_2d = torch.ger(window, window)  # [short_side, short_side]
 
-            img = img * window_2d
+        img = img * window_2d
 
-            # For visualization
-            window_2d_img = window_2d.detach().clone().unsqueeze(-1).tile(1, 1, 3).to(torch.float32)
-            window_2d_img = normalize_0_to_1(window_2d_img, based_on_min_max=True)
+        # For visualization
+        window_2d_img = window_2d.detach().clone().unsqueeze(-1).tile(1, 1, 3).to(torch.float32)
+        window_2d_img = util.normalize_0_to_1(window_2d_img, based_on_min_max=True)
 
-            self.state.window = np.ascontiguousarray(window.cpu().numpy().astype(np.float64))
-        else:
-            window_2d_img = torch.ones((img.shape[-1], img.shape[-1], 3), dtype=torch.float32, device=_device)
-
+        self.state.window = np.ascontiguousarray(window.cpu().numpy().astype(np.float64))
         self.state.window_img = window_2d_img
 
         if self.params.apply_padding:
@@ -395,7 +334,7 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
 
         # For visualization
         windowed_img = img.detach().clone().to(dtype=torch.float32, device=_device)
-        windowed_img = normalize_0_to_1(windowed_img, based_on_min_max=True)
+        windowed_img = util.normalize_0_to_1(windowed_img, based_on_min_max=True)
         if self.img_cmap == 'gray':
             windowed_img = torch.stack([windowed_img, windowed_img, windowed_img], dim=-1)
         else:
@@ -443,10 +382,7 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
             self.params.img_path = pathlib.Path(img_path)
 
     @pyviewer_extended.dockable
-    def toolbar(self) -> None:
-        """Build the toolbar UI for the Color of Noise visualizer.
-        """
-
+    def psd_plot(self) -> None:
         # ---------------------------------------------------------------------------------------------------
         # Plot the power spectrum density
 
@@ -457,8 +393,8 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         heatmap_size = 128 * 5
         if self.state.psd_img is not None and implot.begin_plot(
             'Power Spectrum Density',
-            size=(heatmap_size, heatmap_size),
-            flags=implot.Flags_.no_legend.value
+            size=(-1, -1),
+            flags=implot.Flags_.no_legend.value | implot.Flags_.equal.value
         ):
             psd_img = self.state.psd_img
 
@@ -477,7 +413,6 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
                 bounds_min=implot.Point(-half_size, -half_size),
                 bounds_max=implot.Point(half_size, half_size),
                 label_fmt='',
-                flags=0
             )
 
             imgui.same_line()
@@ -488,12 +423,14 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         if cmap is not None:
             implot.pop_colormap()
 
+    @pyviewer_extended.dockable
+    def radial_psd_plot(self):
         # ---------------------------------------------------------------------------------------------------
         # Plot the radial power spectrum density
 
         if self.state.rad_psd is not None and imgui.same_line() is None and implot.begin_plot(
             'Radial Power Spectrum Density',
-            size=(-1, 512),
+            size=(-1, -1),
             flags=implot.Flags_.no_legend.value
         ):
             implot.setup_axis(implot.ImAxis_.x1, "Frequency [wave number]")
@@ -509,6 +446,11 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
             implot.plot_line('Radial Power Spectrum Density', np.ascontiguousarray(x_value[1:]), np.ascontiguousarray(self.state.rad_psd[1:]))
 
             implot.end_plot()
+
+    @pyviewer_extended.dockable
+    def toolbar(self) -> None:
+        """Build the toolbar UI for the Color of Noise visualizer.
+        """
 
         # ---------------------------------------------------------------------------------------------------
         # Parameters for the noise
@@ -554,34 +496,36 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
             self.params.kernel_size = kernel_size + 1 if kernel_size % 2 == 0 else kernel_size
             self.params.kernel_sigma = imgui.slider_float('Kernel sigma', self.params.kernel_sigma, 0.01, 10.0)[1]
 
-            self.params.affine_interpolation_method = imgui.combo(
-                'Affine interp',
-                self.params.affine_interpolation_method,
-                [m.name for m in InterpMethod],
-            )[1]
-
         # ---------------------------------------------------------------------------------------------------
         # FFT parameters
-        if imgui.collapsing_header('FFT', flags=imgui.TreeNodeFlags_.default_open):
-            imgui.separator_text('Windowing')
-            imgui.push_id('enable_windowing')
-            self.params.apply_windowing = imgui.checkbox('Enable', self.params.apply_windowing)[1]
-            imgui.pop_id()
-            self.params.beta = imgui.slider_float('Beta', self.params.beta, 0.0, 20.0)[1]
 
-            if self.state.window is not None and self.params.apply_windowing and implot.begin_plot('Kaiser Window', size=(-1, 256)):
+        if imgui.collapsing_header('Windowing', flags=imgui.TreeNodeFlags_.default_open):
+            self.params.window_func = imgui.combo(
+                'Window function',
+                self.params.window_func,
+                windowing._window_func_names,
+            )[1]
+
+            imgui.separator_text('Window parameters')
+            window_name = windowing._window_func_names[self.params.window_func]
+            window_func = self.params.windowfn_instances[window_name]
+            for name, param in window_func.params.items():
+                param.add_slider_and_input(name)
+
+            imgui.separator()
+            if self.state.window is not None and implot.begin_plot(f'{window_name} Window', size=(-1, 256)):
                 implot.setup_axes('Pixel', 'Weight')
                 implot.setup_axes_limits(
                     0.0,
-                    self.state.window.shape[0],
-                    0.0,
-                    1.0,
+                    self.state.window.shape[0] - 1,
+                    - 0.3,
+                    1.3,
                     imgui.Cond_.always.value,
                 )
-                implot.plot_line('Kaiser window', self.state.window)
+                implot.plot_line(f'{window_name} window', self.state.window)
                 implot.end_plot()
 
-            imgui.separator_text('Padding')
+        if imgui.collapsing_header('Padding', flags=imgui.TreeNodeFlags_.default_open):
             imgui.push_id('enable_padding')
             self.params.apply_padding = imgui.checkbox('Enable', self.params.apply_padding)[1]
             imgui.pop_id()

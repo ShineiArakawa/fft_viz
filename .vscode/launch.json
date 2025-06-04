@@ -1,0 +1,21 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "interactive vis",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/interactive.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+        },
+        {
+            "name": "windowing vis",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/windowing.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+        }
+    ]
+}
