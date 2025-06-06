@@ -242,7 +242,6 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
 
             if self.base_img is None or self.base_img.file_path != self.params.img_path:
                 img = cv2.imread(str(self.params.img_path), cv2.IMREAD_GRAYSCALE)
-                # img = cv2.flip(img, -1)
                 self.base_img = ImageFile(img=torch.tensor(img).to(dtype=_dtype, device=_device), file_path=self.params.img_path)
 
             img = self.base_img.img
