@@ -11,8 +11,7 @@ import typing
 import uuid
 
 import pydantic.config as config
-import pydantic.dataclasses as dataclasses
-import research_utilities as rutils
+import pydantic.dataclasses as dataclasses 
 import torch
 from imgui_bundle import imgui
 
@@ -20,7 +19,7 @@ import util
 
 # autopep8: on
 
-logger = rutils.get_logger()
+logger = util.get_logger()
 
 # --------------------------------------------------------------------------------------------------------------------------------------------------------
 

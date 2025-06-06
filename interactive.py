@@ -14,9 +14,9 @@ import nfdpy
 import numpy as np
 import pydantic
 import pyviewer_extended
-import research_utilities as rutils
-import research_utilities.signal as _signal
-import research_utilities.torch_util as _torch_util
+import radpsd
+import radpsd.torch_util as _torch_util
+import radpsd.signal as _signal
 import torchvision.transforms.v2.functional as F
 from imgui_bundle import imgui, implot
 
@@ -24,7 +24,7 @@ import util
 import windowing
 # autopep8: on
 
-logger = rutils.get_logger()
+logger = util.get_logger()
 
 # --------------------------------------------------------------------------------------------------------------------------------------------------------
 # Load the C++/CUDA module
@@ -242,10 +242,22 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
 
             if self.base_img is None or self.base_img.file_path != self.params.img_path:
                 img = cv2.imread(str(self.params.img_path), cv2.IMREAD_GRAYSCALE)
-                img = cv2.flip(img, -1)
+                # img = cv2.flip(img, -1)
                 self.base_img = ImageFile(img=torch.tensor(img).to(dtype=_dtype, device=_device), file_path=self.params.img_path)
 
             img = self.base_img.img
+
+            # Add batch dimension
+            img = img.unsqueeze(0)
+
+            # Rotate the image
+            img = F.rotate_image(
+                img,
+                angle=-self.params.rotate,
+                center=None,  # Center the image
+                interpolation=F.InterpolationMode.BILINEAR,
+                expand=False,  # Do not expand the image
+            )
         else:
             super_sampling_factor = self.params.super_sampling_factor if self.params.enable_super_sampling else 1
 
@@ -271,8 +283,8 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
             x = torch.sin(2.0 * np.pi * target_freq * grid)
             img = x[..., 1]  # [n_pixels, n_pixels]
 
-        # Add batch dimension
-        img = img.unsqueeze(0)
+            # Add batch dimension
+            img = img.unsqueeze(0)
 
         if self.params.enable_pre_filering:
             # Prefilering
@@ -302,7 +314,7 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         if self.img_cmap == 'gray':
             img_plot = torch.stack([img_plot, img_plot, img_plot], dim=-1)
         else:
-            img_plot = rutils.apply_color_map(img_plot, self.img_cmap)
+            img_plot = radpsd.apply_color_map(img_plot, self.img_cmap)
 
         self.state.img = img_plot
 
@@ -338,7 +350,7 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         if self.img_cmap == 'gray':
             windowed_img = torch.stack([windowed_img, windowed_img, windowed_img], dim=-1)
         else:
-            windowed_img = rutils.apply_color_map(windowed_img, self.img_cmap)
+            windowed_img = radpsd.apply_color_map(windowed_img, self.img_cmap)
         self.state.windowed_img = windowed_img
 
         # Compute power spectrum density
@@ -352,7 +364,7 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
 
         # ---------------------------------------------------------------------------------------------------
         # Compute the radial power spectrum density
-        rad_psd = _module.calc_radial_psd_profile(
+        rad_psd = _module.calc_radial_psd(
             psd.unsqueeze(0).unsqueeze(-1).contiguous(),  # [1, H, W, 1]
             _n_radial_divs,
             _n_polar_divs,
