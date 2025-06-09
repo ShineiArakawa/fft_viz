@@ -87,6 +87,7 @@ class ImageMode(enum.IntEnum):
     # autopep8: off
     sinusoidal             = 0
     file                   = 1
+    gaussian               = 2
     # autopep8: on
 
     def __str__(self) -> str:
@@ -106,23 +107,37 @@ class Params:
 
     # autopep8: off
     img_mode                            : int          = int(ImageMode.sinusoidal)                                              # image mode
-    img_path                            : pathlib.Path = DEFAULT_IMG_PATH                                                       # image path (Default is a FFHQ image)
-    img_size                            : int          = DEFAULT_IMG_SIZE                                                       # image size
-    enable_super_sampling               : bool         = False                                                                  # enable super sampling
-    super_sampling_factor               : int          = 4                                                                      # super sampling factor
-    enable_pre_filering                 : bool         = False                                                                  # enable pre-filtering
-    pre_filter_padding                  : int          = 8                                                                      # padding for pre-filtering
-    kernel_size                         : int          = 15                                                                     # kernel size for pre-filtering
-    kernel_sigma                        : float        = 0.3 * 6 + 0.8                                                          # sigma for pre-filtering. See also: https://docs.pytorch.org/vision/main/generated/torchvision.transforms.functional.gaussian_blur.html
+
     wave_number                         : float        = 20.0                                                                   # wave number
+
+    img_path                            : pathlib.Path = DEFAULT_IMG_PATH                                                       # image path (Default is a FFHQ image)
+
+    seed                                : int          = 0                                                                      # random seed for the image generation
+    sigma                               : float        = 1.0                                                                    # standard deviation for the Gaussian noise
+
+    img_size                            : int          = DEFAULT_IMG_SIZE                                                       # image size
     rotate                              : float        = 0.0                                                                    # rotation angle in degrees
 
+    enable_super_sampling               : bool         = False                                                                  # enable super sampling
+    super_sampling_factor               : int          = 4                                                                      # super sampling factor
+
+    enable_pre_filering                 : bool         = False                                                                  # enable pre-filtering
+    pre_filter_padding                  : int          = 8                                                                      # padding for pre-filtering
+
+    kernel_size                         : int          = 15                                                                     # kernel size for pre-filtering
+    kernel_sigma                        : float        = 0.3 * 6 + 0.8                                                          # sigma for pre-filtering. See also: https://docs.pytorch.org/vision/main/generated/torchvision.transforms.functional.gaussian_blur.html
+
     window_func                         : int          = 0                                                                      # windowing function
+
     apply_padding                       : bool         = False                                                                  # apply zero padding to the image
     padding_factor                      : int          = 4                                                                      # padding factor for the FFT
 
     img_cmap_id                         : int          = 5                                                                      # color map ID for the sinusoidal image, by default 'gray'
     psd_cmap_id                         : int          = 1                                                                      # color map ID for the power spectrum density, by default 'plasma'
+
+    radial_psd_ylim_fixed               : bool         = False                                                                  # fix the y-limits of the radial power spectrum density plot
+    radial_psd_ylim_min                 : float        = 1e-12                                                                  # minimum y-limit for the radial power spectrum density plot
+    radial_psd_ylim_max                 : float        = 1e2                                                                    # maximum y-limit for the radial power spectrum density plot
 
     windowfn_instances                  : dict[str, windowing.WindowFunctionBase] = pydantic.Field(default_factory=dict)        # window functions, instantiated in the __post_init__ method
     # autopep8: on
@@ -257,6 +272,11 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
                 interpolation=F.InterpolationMode.BILINEAR,
                 expand=False,  # Do not expand the image
             )
+        elif self.params.img_mode == ImageMode.gaussian:
+            super_sampling_factor = 1  # disable super sampling for file images
+
+            generator = torch.Generator(device=_device).manual_seed(self.params.seed)
+            img = self.params.sigma * torch.randn((1, self.params.img_size, self.params.img_size), dtype=_dtype, device=_device, generator=generator)  # zero DC
         else:
             super_sampling_factor = self.params.super_sampling_factor if self.params.enable_super_sampling else 1
 
@@ -397,14 +417,18 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         # ---------------------------------------------------------------------------------------------------
         # Plot the power spectrum density
 
+        x_avail, _ = imgui.get_content_region_avail()
+        color_bar_prop = 0.1  # 10% for the color bar
+        plot_width = x_avail * (1.0 - color_bar_prop)
+        color_bar_width = x_avail - plot_width
+
         cmap = getattr(implot.Colormap_, self.psd_cmap, None)
         if cmap is not None:
             implot.push_colormap(cmap.value)
 
-        heatmap_size = 128 * 5
         if self.state.psd_img is not None and implot.begin_plot(
             'Power Spectrum Density',
-            size=(-1, -1),
+            size=(plot_width, -1),
             flags=implot.Flags_.no_legend.value | implot.Flags_.equal.value
         ):
             psd_img = self.state.psd_img
@@ -427,7 +451,7 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
             )
 
             imgui.same_line()
-            implot.colormap_scale("Power Spectrum Density [dB]", scale_min, scale_max, size=(20, heatmap_size))
+            implot.colormap_scale("Power Spectrum Density [dB]", scale_min, scale_max, size=(color_bar_width, -1))
 
             implot.end_plot()
 
@@ -448,6 +472,8 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
             implot.setup_axis_limits(implot.ImAxis_.x1, 0.0, self.params.img_size / 2, imgui.Cond_.always.value)
 
             implot.setup_axis(implot.ImAxis_.y1, "Power Spectrum Density [dB]", flags=implot.AxisFlags_.auto_fit.value)
+            if self.params.radial_psd_ylim_fixed:
+                implot.setup_axis_limits(implot.ImAxis_.y1, self.params.radial_psd_ylim_min, self.params.radial_psd_ylim_max, imgui.Cond_.always.value)
 
             # log-log scale
             implot.setup_axis_scale(implot.ImAxis_.x1, implot.Scale_.linear)
@@ -482,6 +508,9 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
                 imgui.text('Wave number Input ')
                 imgui.same_line()
                 self.params.wave_number = imgui.input_float('##Wave number input', self.params.wave_number)[1]
+            elif self.params.img_mode == ImageMode.gaussian:
+                self.params.seed = imgui.slider_int('Random seed', self.params.seed, 0, 10000)[1]
+                self.params.sigma = imgui.slider_float('Standard deviation', self.params.sigma, 0.0, 100.0)[1]
             else:
                 self.params.img_path = pathlib.Path(imgui.input_text('Image path', str(self.params.img_path))[1])
                 imgui.same_line()
@@ -548,8 +577,15 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         # ---------------------------------------------------------------------------------------------------
         # Visualization parameters
         if imgui.collapsing_header('Visualization', flags=imgui.TreeNodeFlags_.default_open):
+            imgui.separator_text('Color maps')
             self.params.img_cmap_id = imgui.combo('Image color map', self.params.img_cmap_id, MPL_CMAPS)[1]
             self.params.psd_cmap_id = imgui.combo('PSD color map', self.params.psd_cmap_id, MPL_CMAPS)[1]
+
+            imgui.separator_text('Radial PSD')
+            self.params.radial_psd_ylim_fixed = imgui.checkbox('Fix y-limits', self.params.radial_psd_ylim_fixed)[1]
+            if self.params.radial_psd_ylim_fixed:
+                self.params.radial_psd_ylim_min = imgui.input_float('Min y-limit', self.params.radial_psd_ylim_min, step=1e-10, format='%.2e')[1]
+                self.params.radial_psd_ylim_max = imgui.input_float('Max y-limit', self.params.radial_psd_ylim_max, step=1e-10, format='%.2e')[1]
 
         imgui.separator()
 
