@@ -1,7 +1,12 @@
 # isort: skip_file
 # autopep8: off
+from __future__ import annotations
+
+import argparse
 import copy
+import dataclasses
 import enum
+import json
 import math
 import pathlib
 import typing
@@ -14,8 +19,8 @@ import numpy as np
 import pydantic
 import pyviewer_extended
 import radpsd
-import radpsd.torch_util as _torch_util
 import radpsd.signal as _signal
+import radpsd.torch_util as _torch_util
 import torchvision.io as io
 import torchvision.transforms.v2.functional as F
 from imgui_bundle import imgui, implot
@@ -146,6 +151,54 @@ class Params:
         for name, cls in windowing._window_funcs.items():
             self.windowfn_instances[name] = cls()
 
+    IO_BOUND = [int, float, bool, pathlib.Path]
+
+    def load(self, file_path: pathlib.Path) -> None:
+        with open(file_path, mode='r') as file:
+            params_dict = json.load(file)
+
+        for field in dataclasses.fields(Params):
+            param_name = field.name
+            param_value = getattr(self, param_name)
+
+            if param_name not in params_dict or param_value is None:
+                continue
+
+            for target_type in self.IO_BOUND:
+                if isinstance(param_value, target_type):
+                    if isinstance(param_value, pathlib.Path):
+                        param_value = pathlib.Path(params_dict[param_name])
+                    else:
+                        param_value = params_dict[param_name]
+
+                    setattr(self, param_name, param_value)
+                    break
+
+    def dump(self, file_path: pathlib.Path) -> Params:
+        params_dict = {}
+
+        for field in dataclasses.fields(Params):
+            param_name = field.name
+            param_value = getattr(self, param_name)
+
+            if param_value is None:
+                continue
+
+            for target_type in self.IO_BOUND:
+                if isinstance(param_value, target_type):
+                    if isinstance(param_value, pathlib.Path):
+                        # Convert pathlib.Path to str for json compatibility
+                        param_value = str(param_value)
+
+                    params_dict[param_name] = param_value
+                    break
+
+        file_path = file_path.resolve()
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(file_path, mode='w') as file:
+            json.dump(params_dict, file, indent=4, ensure_ascii=False)
+
 
 @pydantic.dataclasses.dataclass(config=pydantic.dataclasses.ConfigDict(arbitrary_types_allowed=True))
 class ImageFile:
@@ -189,19 +242,22 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
     # Constants
 
     # autopep8: off
-    KEY_INPUT        : typing.Final[str] = 'Input'
-    KEY_MASKED       : typing.Final[str] = 'Masked'
-    KEY_MASKED_INPUT : typing.Final[str] = 'Masked Input'
+    KEY_INPUT         : typing.Final[str] = 'Input'
+    KEY_MASKED        : typing.Final[str] = 'Masked'
+    KEY_MASKED_INPUT  : typing.Final[str] = 'Masked Input'
 
-    KEYS                                 = [KEY_INPUT, KEY_MASKED, KEY_MASKED_INPUT]
+    KEYS                                  = [KEY_INPUT, KEY_MASKED, KEY_MASKED_INPUT]
 
-    MIN_IMG_SIZE     : int               = 8
-    MAX_IMG_SIZE     : int               = 2048
+    MIN_IMG_SIZE      : int               = 8
+    MAX_IMG_SIZE      : int               = 2048
+
+    PARAMS_CACHE_PATH : pathlib.Path      = pathlib.Path('.cache/params.json')
     # autopep8: on
 
     # ------------------------------------------------------------------------------------
 
-    def __init__(self, name):
+    def __init__(self, name, cache_params: bool = False):
+        self.cache_params = cache_params
         self.base_img: ImageFile | None = None
 
         # ------------------------------------------------------------------------------------
@@ -221,6 +277,16 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
 
         self.state.window = None
         self.state.rad_psd = None
+
+        # Load params
+        if self.cache_params and self.PARAMS_CACHE_PATH.is_file():
+            self.state.params.load(self.PARAMS_CACHE_PATH)
+            print(f'Loaded parameters from {self.PARAMS_CACHE_PATH}')
+
+    def save_settings(self) -> None:
+        if self.cache_params:
+            self.state.params.dump(self.PARAMS_CACHE_PATH)
+            print(f'Saved parameters to {self.PARAMS_CACHE_PATH}')
 
     @property
     def params(self) -> Params | None:
@@ -363,10 +429,13 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         # Compute FFT
 
         # Apply windowing
-        window_name = windowing._window_func_names[self.params.window_func if self.params.enable_windowing else 0]  # '0' means no-op rectangular window
-        window_func = self.params.windowfn_instances[window_name]
+        if self.params.enable_windowing:
+            window_name = windowing._window_func_names[self.params.window_func if self.params.enable_windowing else 0]  # '0' means no-op rectangular window
+            window_func = self.params.windowfn_instances[window_name]
+            window = window_func.calc_window(img.shape[-1], dtype=img.dtype, device=img.device)
+        else:
+            window = torch.ones(img.shape[-1], dtype=img.dtype, device=img.device)
 
-        window = window_func.calc_window(img.shape[-1], dtype=img.dtype, device=img.device)
         window_2d = torch.ger(window, window)  # [win_size, win_size]
         window_2d = window_2d.unsqueeze(0)  # add channel dimension
 
@@ -661,5 +730,15 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
 
 
 if __name__ == '__main__':
-    _ = FFTVisualizer('FFT')
+    parser = argparse.ArgumentParser(
+        description='A Visualizer for High-quality Discrete Fourier Transforms',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    parser.add_argument(
+        '--cache_params',
+        action='store_true',
+    )
+    args = parser.parse_args()
+
+    _ = FFTVisualizer('FFT', cache_params=args.cache_params)
     logger.info('Bye!')
