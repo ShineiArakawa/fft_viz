@@ -9,7 +9,6 @@ import typing
 # NOTE: Make sure to import PyTorch before importing PyViewer-extended
 import torch
 
-import cv2
 import nfdpy
 import numpy as np
 import pydantic
@@ -17,6 +16,7 @@ import pyviewer_extended
 import radpsd
 import radpsd.torch_util as _torch_util
 import radpsd.signal as _signal
+import torchvision.io as io
 import torchvision.transforms.v2.functional as F
 from imgui_bundle import imgui, implot
 
@@ -74,12 +74,6 @@ class InterpMethod(enum.IntEnum):
         return [
             F.InterpolationMode.NEAREST,
             F.InterpolationMode.BILINEAR,
-        ][self.value]
-
-    def to_cv2(self) -> int:
-        return [
-            cv2.INTER_NEAREST,
-            cv2.INTER_LINEAR,
         ][self.value]
 
 
@@ -256,8 +250,9 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
             super_sampling_factor = 1  # disable super sampling for file images
 
             if self.base_img is None or self.base_img.file_path != self.params.img_path:
-                img = cv2.imread(str(self.params.img_path), cv2.IMREAD_GRAYSCALE)
-                self.base_img = ImageFile(img=torch.tensor(img).to(dtype=_dtype, device=_device), file_path=self.params.img_path)
+                img_decoded = io.decode_image(self.params.img_path, mode=io.ImageReadMode.GRAY)
+                img_decoded = F.to_dtype(img_decoded, scale=True).to(dtype=_dtype, device=_device)
+                self.base_img = ImageFile(img=img_decoded, file_path=self.params.img_path)
 
             img = self.base_img.img
 

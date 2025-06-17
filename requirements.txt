@@ -4,11 +4,9 @@ loguru==0.7.3
     # via fft-viz (pyproject.toml)
 nfdpy @ git+https://github.com/ShineiArakawa/nfdpy.git@4ebb8810562c993739f15cb265c646afc42b8eb4
     # via fft-viz (pyproject.toml)
-opencv-python==4.11.0.86
-    # via fft-viz (pyproject.toml)
 pyviewer-extended @ git+https://github.com/ShineiArakawa/pyviewer-extended.git@972945490285665a4f8abddeb039b33d9ff8f733
     # via fft-viz (pyproject.toml)
-radpsd @ git+https://github.com/ShineiArakawa/radpsd.git@fa08bb73c936162983bf42d7afe1ad60ccc3fc12
+radpsd @ git+https://github.com/ShineiArakawa/radpsd.git@46cc57925600badccd04d059f54526e45eff7af7
     # via fft-viz (pyproject.toml)
 setuptools==72.1.0
     # via fft-viz (pyproject.toml)
