@@ -130,7 +130,7 @@ class WindowFunctionBase(metaclass=abc.ABCMeta):
         return self._params
 
     @abc.abstractmethod
-    def calc_window(self, size: int, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
+    def calc_window(self, size: int, dtype: torch.dtype, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
         pass
 
 
@@ -138,31 +138,33 @@ class RectangualrWindow(WindowFunctionBase):
     def __init__(self):
         super().__init__()
 
-    def calc_window(self, size: int, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
+    def calc_window(self, size: int, dtype: torch.dtype, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
         window = torch.ones((size,), dtype=dtype, device=device)
         window *= window.square().sum().rsqrt()
-        return window
+        window_2d = torch.ger(window, window)  # [win_size, win_size]
+        return window, window_2d
 
 
 class TriangularWindow(WindowFunctionBase):
     def __init__(self):
         super().__init__()
 
-    def calc_window(self, size: int, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
+    def calc_window(self, size: int, dtype: torch.dtype, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
         half_size = (size + 2 - 1) // 2
         window = torch.linspace(0.0, 1.0, half_size, dtype=dtype, device=device)
         start_idx = 0 if size % 2 == 0 else 1
         window = torch.cat([window, window.flip(0)[start_idx:]], dim=0)
         assert window.shape[0] == size, f'Window size mismatch: {window.shape[0]} != {size}'
         window *= window.square().sum().rsqrt()
-        return window
+        window_2d = torch.ger(window, window)  # [win_size, win_size]
+        return window, window_2d
 
 
 class ParzenWindow(WindowFunctionBase):
     def __init__(self):
         super().__init__()
 
-    def calc_window(self, size: int, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
+    def calc_window(self, size: int, dtype: torch.dtype, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
         N = size - 1
         L = N + 1
 
@@ -178,15 +180,16 @@ class ParzenWindow(WindowFunctionBase):
         window[center_idx] = 2.0 * (1.0 - 2.0 * n[center_idx].abs() / L) ** 3
 
         window *= window.square().sum().rsqrt()
+        window_2d = torch.ger(window, window)  # [win_size, win_size]
 
-        return window
+        return window, window_2d
 
 
 class WelchWindow(WindowFunctionBase):
     def __init__(self):
         super().__init__()
 
-    def calc_window(self, size: int, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
+    def calc_window(self, size: int, dtype: torch.dtype, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
         N = size - 1
 
         n = torch.arange(0, N + 1, device=device).to(dtype=dtype)  # [0, 1, ..., N]
@@ -196,17 +199,19 @@ class WelchWindow(WindowFunctionBase):
         # window = torch.clamp(window, min=0.0, max=1.0)
         window *= window.square().sum().rsqrt()
 
-        return window
+        window_2d = torch.ger(window, window)  # [win_size, win_size]
+        return window, window_2d
 
 
 class HannWindow(WindowFunctionBase):
     def __init__(self):
         super().__init__()
 
-    def calc_window(self, size: int, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
+    def calc_window(self, size: int, dtype: torch.dtype, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
         window = torch.hann_window(window_length=size, dtype=dtype, device=device, periodic=False)
         window *= window.square().sum().rsqrt()
-        return window
+        window_2d = torch.ger(window, window)  # [win_size, win_size]
+        return window, window_2d
 
 
 class HammingWindow(WindowFunctionBase):
@@ -220,13 +225,14 @@ class HammingWindow(WindowFunctionBase):
             'beta': ValueEntity(value=1.0 - 0.46164, value_type=float, min_value=0.0, max_value=1.0),
         }
 
-    def calc_window(self, size: int, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
+    def calc_window(self, size: int, dtype: torch.dtype, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
         alpha = float(self._params['alpha'].value)
         beta = float(self._params['beta'].value)
 
         window = torch.hamming_window(window_length=size, dtype=dtype, device=device, alpha=alpha, beta=beta, periodic=False)
         window *= window.square().sum().rsqrt()
-        return window
+        window_2d = torch.ger(window, window)  # [win_size, win_size]
+        return window, window_2d
 
 
 class ExponentialWindow(WindowFunctionBase):
@@ -237,31 +243,57 @@ class ExponentialWindow(WindowFunctionBase):
             'tau': ValueEntity(value=1.0, value_type=float, min_value=0.01, max_value=10.0),
         }
 
-    def calc_window(self, size: int, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
+    def calc_window(self, size: int, dtype: torch.dtype, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
         tau = float(self._params['tau'].value)
         window = torch.windows.exponential(size, dtype=dtype, device=device, tau=tau)
         window *= window.square().sum().rsqrt()
-        return window
+        window_2d = torch.ger(window, window)  # [win_size, win_size]
+        return window, window_2d
+
+
+class ExponentialSymmetricWindow(WindowFunctionBase):
+    def __init__(self):
+        super().__init__()
+
+        self._params = {
+            'sigma': ValueEntity(value=1.0, value_type=float, min_value=0.01, max_value=5.0),
+        }
+
+    def calc_window(self, size: int, dtype: torch.dtype, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
+        sigma = float(self._params['sigma'].value)
+        t = torch.linspace(-1.0, 1.0, size, dtype=dtype, device=device)
+        x, y = torch.meshgrid(t, t, indexing='ij')
+        r = (x ** 2 + y ** 2).sqrt()
+
+        window = torch.exp(- t.abs() / sigma)
+        window *= window.square().sum().rsqrt()
+
+        window_2d = torch.exp(- r.abs() / sigma)
+        window_2d *= window_2d.square().sum().rsqrt()
+
+        return window, window_2d
 
 
 class NuttallWindow(WindowFunctionBase):
     def __init__(self):
         super().__init__()
 
-    def calc_window(self, size: int, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
+    def calc_window(self, size: int, dtype: torch.dtype, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
         window = torch.windows.nuttall(size, dtype=dtype, device=device)
         window *= window.square().sum().rsqrt()
-        return window
+        window_2d = torch.ger(window, window)  # [win_size, win_size]
+        return window, window_2d
 
 
 class BackmanWindow(WindowFunctionBase):
     def __init__(self):
         super().__init__()
 
-    def calc_window(self, size: int, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
+    def calc_window(self, size: int, dtype: torch.dtype, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
         window = torch.blackman_window(size, dtype=dtype, device=device)
         window *= window.square().sum().rsqrt()
-        return window
+        window_2d = torch.ger(window, window)  # [win_size, win_size]
+        return window, window_2d
 
 
 class FlatTopWindow(WindowFunctionBase):
@@ -276,7 +308,7 @@ class FlatTopWindow(WindowFunctionBase):
             'a_4': ValueEntity(value=0.006947368, value_type=float, min_value=0.0, max_value=1.0),
         }
 
-    def calc_window(self, size: int, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
+    def calc_window(self, size: int, dtype: torch.dtype, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
         N = size - 1
         n = torch.arange(0, N + 1, device=device).to(dtype=dtype)  # [0, 1, ..., N]
 
@@ -294,7 +326,8 @@ class FlatTopWindow(WindowFunctionBase):
 
         window *= window.square().sum().rsqrt()
 
-        return window
+        window_2d = torch.ger(window, window)  # [win_size, win_size]
+        return window, window_2d
 
 
 class KaiserWindow(WindowFunctionBase):
@@ -305,24 +338,27 @@ class KaiserWindow(WindowFunctionBase):
             'beta': ValueEntity(value=8.0, value_type=float, min_value=0.0, max_value=100.0),
         }
 
-    def calc_window(self, size: int, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
+    def calc_window(self, size: int, dtype: torch.dtype, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
         beta = float(self._params['beta'].value)
         window = torch.kaiser_window(size, periodic=False, dtype=dtype, device=device, beta=beta)
         window *= window.square().sum().rsqrt()
-        return window
+        window_2d = torch.ger(window, window)  # [win_size, win_size]
+        return window, window_2d
 
 
 class LanczosWindow(WindowFunctionBase):
     def __init__(self):
         super().__init__()
 
-    def calc_window(self, size: int, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
+    def calc_window(self, size: int, dtype: torch.dtype, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
         N = size - 1
         n = torch.arange(0, N + 1, device=device).to(dtype=dtype)  # [0, 1, ..., N]
         window = torch.sinc(2.0 * n / N - 1.0)
 
         window *= window.square().sum().rsqrt()
-        return window  # Lanczos window is normalized by its sum, not square root of sum of squares.
+        window_2d = torch.ger(window, window)  # [win_size, win_size]
+
+        return window, window_2d  # Lanczos window is normalized by its sum, not square root of sum of squares.
 
 
 _window_func_names: typing.Final[tuple[str]] = [
@@ -337,6 +373,7 @@ _window_func_names: typing.Final[tuple[str]] = [
     # ----------
     # Exponential windows
     'exponential',
+    'exponential_sym',
     # ----------
     # Raised cosine windows
     'Nuttall',
@@ -356,6 +393,7 @@ _window_funcs: dict[str, typing.Type[WindowFunctionBase]] = {
     'Hann': HannWindow,
     'Hamming': HammingWindow,
     'exponential': ExponentialWindow,
+    'exponential_sym': ExponentialSymmetricWindow,
     'Nuttall': NuttallWindow,
     'Blackman': BackmanWindow,
     'flattop': FlatTopWindow,
@@ -400,11 +438,10 @@ if __name__ == '__main__':
         def compute(self):
             window_func: WindowFunctionBase = self.state.window_func[_window_func_names[self.state.window]]
 
-            window_1d = window_func.calc_window(
+            window_1d, window_2d = window_func.calc_window(
                 self.state.window_size, dtype=dtype, device=device
             )
 
-            window_2d = torch.ger(window_1d, window_1d)
             window_2d = window_2d.unsqueeze(-1).tile(1, 1, 3).to(torch.float32)
 
             self.state.window_img = util.normalize_0_to_1(window_2d,  based_on_min_max=True)

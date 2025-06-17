@@ -429,14 +429,10 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         # Compute FFT
 
         # Apply windowing
-        if self.params.enable_windowing:
-            window_name = windowing._window_func_names[self.params.window_func if self.params.enable_windowing else 0]  # '0' means no-op rectangular window
-            window_func = self.params.windowfn_instances[window_name]
-            window = window_func.calc_window(img.shape[-1], dtype=img.dtype, device=img.device)
-        else:
-            window = torch.ones(img.shape[-1], dtype=img.dtype, device=img.device)
+        window_name = windowing._window_func_names[self.params.window_func if self.params.enable_windowing else 0]  # '0' means no-op rectangular window
+        window_func = self.params.windowfn_instances[window_name]
+        window, window_2d = window_func.calc_window(img.shape[-1], dtype=img.dtype, device=img.device)
 
-        window_2d = torch.ger(window, window)  # [win_size, win_size]
         window_2d = window_2d.unsqueeze(0)  # add channel dimension
 
         img = img * window_2d
