@@ -302,7 +302,7 @@ class KaiserWindow(WindowFunctionBase):
         super().__init__()
 
         self._params = {
-            'beta': ValueEntity(value=8.0, value_type=float, min_value=0.0, max_value=50.0),
+            'beta': ValueEntity(value=8.0, value_type=float, min_value=0.0, max_value=100.0),
         }
 
     def calc_window(self, size: int, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
@@ -362,6 +362,9 @@ _window_funcs: dict[str, typing.Type[WindowFunctionBase]] = {
     'Kaiser': KaiserWindow,
     'Lanczos': LanczosWindow,
 }
+
+# -------------------------------------------------------------------------------------------------------------------------------------------------
+# Visualizer for debugging
 
 if __name__ == '__main__':
     import numpy as np

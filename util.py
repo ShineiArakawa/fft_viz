@@ -34,14 +34,8 @@ def normalize_0_to_1(x: ArrayLike, based_on_min_max: bool = False) -> ArrayLike:
 
     if isinstance(x, np.ndarray):
         if based_on_min_max:
-            if x.ndim == 3:
-                min = np.min(x, axis=(0, 1), keepdims=True)
-                max = np.max(x, axis=(0, 1), keepdims=True)
-            elif x.ndim == 2:
-                min = np.min(x)
-                max = np.max(x)
-            else:
-                raise ValueError("Input array must be 2D or 3D.")
+            min = np.min(x)
+            max = np.max(x)
         else:
             # [-1, 1] -> [0, 1]
             min = -1.0
@@ -50,15 +44,8 @@ def normalize_0_to_1(x: ArrayLike, based_on_min_max: bool = False) -> ArrayLike:
         return np.clip((x - min) / (max - min + 1e-8), 0.0, 1.0)
 
     if based_on_min_max:
-        if x.ndim == 3:
-            flattend = x.reshape(-1, x.shape[-1])
-            min = flattend.min(dim=0, keepdim=True).values.unsqueeze(0)
-            max = flattend.max(dim=0, keepdim=True).values.unsqueeze(0)
-        elif x.ndim == 2:
-            min = torch.min(x)
-            max = torch.max(x)
-        else:
-            raise ValueError("Input tensor must be 2D or 3D.")
+        min = torch.min(x)
+        max = torch.max(x)
     else:
         # [-1, 1] -> [0, 1]
         min = -1.0
