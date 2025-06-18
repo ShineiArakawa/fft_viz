@@ -145,11 +145,11 @@ class Params:
     padding_factor                      : int          = 4                                                                      # padding factor for the FFT
 
     img_cmap_id                         : int          = 5                                                                      # color map ID for the sinusoidal image, by default 'gray'
-    psd_cmap_id                         : int          = 1                                                                      # color map ID for the power spectrum density, by default 'plasma'
+    psd_cmap_id                         : int          = 1                                                                      # color map ID for the power spectral density, by default 'plasma'
 
-    psd_profile_ylim_fixed               : bool         = False                                                                  # fix the y-limits of the radial and axial power spectrum density plot
-    psd_profile_ylim_min                 : float        = 1e-12                                                                  # minimum y-limit for the radial and axial power spectrum density plot
-    psd_profile_ylim_max                 : float        = 1e2                                                                    # maximum y-limit for the radial and axial power spectrum density plot
+    psd_profile_ylim_fixed               : bool         = False                                                                  # fix the y-limits of the radial and axial power spectral density plot
+    psd_profile_ylim_min                 : float        = 1e-12                                                                  # minimum y-limit for the radial and axial power spectral density plot
+    psd_profile_ylim_max                 : float        = 1e2                                                                    # maximum y-limit for the radial and axial power spectral density plot
     psd_profile_xscale_log               : bool         = False                                                                  # show x axis in log10 scale?
     psd_profile_yscale_log               : bool         = True                                                                   # show y axis in log10 scale?
 
@@ -477,7 +477,7 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         assert windowed_img.shape[-1] == 3
         self.state.windowed_img = windowed_img
 
-        # Compute power spectrum density
+        # Compute power spectral density
         spectrum: torch.Tensor = torch.fft.fftn(img, dim=(-2, -1)).abs().square()
         spectrum = torch.fft.fftshift(spectrum, dim=(-2, -1))
         psd = spectrum / (img.shape[-2] * img.shape[-1])
@@ -497,7 +497,7 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         self.state.psd_img = np.ascontiguousarray(psd_plot.cpu().numpy()).astype(np.float32)
 
         # ---------------------------------------------------------------------------------------------------
-        # Compute the radial power spectrum density
+        # Compute the radial power spectral density
         rad_psd = _module.calc_radial_psd(
             psd.permute(1, 2, 0).unsqueeze(0).contiguous(),  # [1, H, W, C]
             _n_radial_divs,
@@ -530,7 +530,7 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
     @pyviewer_extended.dockable
     def psd_plot(self) -> None:
         # ---------------------------------------------------------------------------------------------------
-        # Plot the power spectrum density
+        # Plot the power spectral density
 
         x_avail, _ = imgui.get_content_region_avail()
         color_bar_prop = 0.10  # 10% for the color bar
@@ -547,7 +547,7 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
             scale_max = np.max(psd_img)
 
             if implot.begin_plot(
-                'Power Spectrum Density',
+                'Power Spectral Density',
                 size=(plot_width, -1),
                 flags=implot.Flags_.no_legend.value | implot.Flags_.equal.value
             ):
@@ -557,7 +557,7 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
                 implot.setup_axes("Frequency [wave number]", "Frequency [wave number]")
                 implot.setup_axes_limits(-half_size, half_size, -half_size, half_size)
                 implot.plot_heatmap(
-                    label_id='Head Power Spectrum Density',
+                    label_id='Heat Power Spectral Density',
                     values=psd_img,
                     scale_min=scale_min,
                     scale_max=scale_max,
@@ -569,20 +569,20 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
                 implot.end_plot()
 
             imgui.same_line()
-            implot.colormap_scale("Power Spectrum Density [dB]", scale_min, scale_max, size=(color_bar_width, -1))
+            implot.colormap_scale("Power Spectral Density [dB]", scale_min, scale_max, size=(color_bar_width, -1))
 
         if cmap is not None:
             implot.pop_colormap()
 
     @pyviewer_extended.dockable
     def psd_profile_plot(self):
-        if imgui.begin_tab_bar('Power Spectrum Density Profiles'):
+        if imgui.begin_tab_bar('Power Spectral Density Profiles'):
             # ----------------------------------------------------------------------------------------------------------------------------------------------------
-            # Plot the radial power spectrum density
+            # Plot the radial power spectral density
 
             if imgui.begin_tab_item_simple('Radial'):
                 if self.state.rad_psd is not None and implot.begin_plot(
-                    'Radial Power Spectrum Density',
+                    'Radial Power Spectral Density',
                     size=(-1, -1),
                     flags=implot.Flags_.no_legend.value if self.state.rad_psd.shape[1] == 1 else 0
                 ):
@@ -591,7 +591,7 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
                     implot.setup_axis_limits(implot.ImAxis_.x1, 1.0, self.params.img_size / 2, imgui.Cond_.always.value)
 
                     # Setup y axis
-                    implot.setup_axis(implot.ImAxis_.y1, "Power Spectrum Density [dB]", flags=implot.AxisFlags_.auto_fit.value)
+                    implot.setup_axis(implot.ImAxis_.y1, "Power Spectral Density [dB]", flags=implot.AxisFlags_.auto_fit.value)
                     if self.params.psd_profile_ylim_fixed:
                         implot.setup_axis_limits(implot.ImAxis_.y1, self.params.psd_profile_ylim_min, self.params.psd_profile_ylim_max, imgui.Cond_.always.value)
 
@@ -612,19 +612,19 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
                         implot.set_next_line_style(imgui.ImVec4(0.0, 0.0, 1.0, 1.0))
                         implot.plot_line('Radial PSD - Blue', freq, np.ascontiguousarray(self.state.rad_psd[1:, 2]))
                     else:
-                        implot.plot_line('Radial Power Spectrum Density', freq, np.ascontiguousarray(self.state.rad_psd[1:, 0]))
+                        implot.plot_line('Radial Power Spectral Density', freq, np.ascontiguousarray(self.state.rad_psd[1:, 0]))
 
                     implot.end_plot()
                 imgui.end_tab_item()
 
             # ----------------------------------------------------------------------------------------------------------------------------------------------------
-            # Plot the axial power spectrum density
+            # Plot the axial power spectral density
 
             for label, axial_psd in (('Horizontal', self.state.axial_psd_h), ('Vertical', self.state.axial_psd_v)):
                 if imgui.begin_tab_item_simple(label):
-                    # Plot the axial power spectrum density
+                    # Plot the axial power spectral density
                     if axial_psd is not None and self.state.psd_img is not None and implot.begin_plot(
-                        f'{label} Power Spectrum Density',
+                        f'{label} Power Spectral Density',
                         size=(-1, -1),
                         flags=implot.Flags_.no_legend.value if axial_psd.shape[0] == 1 else 0
                     ):
@@ -636,7 +636,7 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
                         implot.setup_axis_limits(implot.ImAxis_.x1, freq.min(), freq.max(), imgui.Cond_.always.value)
 
                         # Setup y axis
-                        implot.setup_axis(implot.ImAxis_.y1, "Power Spectrum Density [dB]", flags=implot.AxisFlags_.auto_fit.value)
+                        implot.setup_axis(implot.ImAxis_.y1, "Power Spectral Density [dB]", flags=implot.AxisFlags_.auto_fit.value)
                         if self.params.psd_profile_ylim_fixed:
                             implot.setup_axis_limits(implot.ImAxis_.y1, self.params.psd_profile_ylim_min, self.params.psd_profile_ylim_max, imgui.Cond_.always.value)
 
@@ -653,7 +653,7 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
                             implot.set_next_line_style(imgui.ImVec4(0.0, 0.0, 1.0, 1.0))
                             implot.plot_line(f'{label} PSD - Blue', freq, np.ascontiguousarray(axial_psd[2, 1:]))
                         else:
-                            implot.plot_line('Horizontal Power Spectrum Density', freq, np.ascontiguousarray(axial_psd[0, 1:]))
+                            implot.plot_line('Horizontal Power Spectral Density', freq, np.ascontiguousarray(axial_psd[0, 1:]))
 
                         implot.end_plot()
                     imgui.end_tab_item()
@@ -769,7 +769,7 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
             self.params.img_cmap_id = imgui.combo('Image color map', self.params.img_cmap_id, MPL_CMAPS)[1]
             self.params.psd_cmap_id = imgui.combo('PSD color map', self.params.psd_cmap_id, MPL_CMAPS)[1]
 
-            imgui.separator_text('Power Spectrum Density Profile')
+            imgui.separator_text('Power Spectral Density Profile')
             self.params.psd_profile_ylim_fixed = imgui.checkbox('Fix y-limits', self.params.psd_profile_ylim_fixed)[1]
             if self.params.psd_profile_ylim_fixed:
                 self.params.psd_profile_ylim_min = imgui.input_float('Min y-limit', self.params.psd_profile_ylim_min, step=1e-10, format='%.2e')[1]
@@ -786,7 +786,7 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
-        description='A Visualizer for High-quality Discrete Fourier Transforms',
+        description='A high-quality FFT visualization tool',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     parser.add_argument(
@@ -795,5 +795,5 @@ if __name__ == '__main__':
     )
     args = parser.parse_args()
 
-    _ = FFTVisualizer('FFT', cache_params=args.cache_params)
+    _ = FFTVisualizer('FFT Vis', cache_params=args.cache_params)
     logger.info('Bye!')

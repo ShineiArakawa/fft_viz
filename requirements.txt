@@ -2,6 +2,8 @@
 #    uv pip compile --no-deps --output-file requirements.txt pyproject.toml
 imgui-bundle==1.6.3
     # via fft-viz (pyproject.toml)
+loguru==0.7.3
+    # via fft-viz (pyproject.toml)
 nfdpy @ git+https://github.com/ShineiArakawa/nfdpy.git
     # via fft-viz (pyproject.toml)
 numpy==2.3.0

@@ -1,11 +1,12 @@
 [project]
 name = "fft-viz"
 version = "0.6.0"
-description = "High-quality FFT visualization tool"
+description = "A high-quality FFT visualization tool"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "imgui-bundle",
+    "loguru",
     "nfdpy",
     "numpy",
     "pydantic",
