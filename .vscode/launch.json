@@ -8,9 +8,6 @@
             "program": "${workspaceFolder}/interactive.py",
             "console": "integratedTerminal",
             "justMyCode": false,
-            "args": [
-                "--cache_params"
-            ]
         },
         {
             "name": "windowing vis",

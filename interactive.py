@@ -1,4 +1,5 @@
-# -*- coding: utf-8 -*-
+"""A interactive visualizer program for high-quality DCT analysis
+"""
 
 # isort: skip_file
 # autopep8: off
@@ -26,6 +27,7 @@ import radpsd.torch_util as _torch_util
 import torchvision.io as io
 import torchvision.transforms.v2.functional as F
 from imgui_bundle import imgui, implot
+from imgui_bundle.glfw_utils import glfw # Do not import glfw directly because imgui has its own pre-build glfw to be linked.
 
 import util
 import windowing
@@ -99,6 +101,10 @@ class ImageMode(enum.IntEnum):
 
 MPL_CMAPS: typing.Final[list[str]] = ['viridis', 'plasma', 'inferno', 'magma', 'cividis', 'gray']
 
+# Window functions
+WINDOW_FUNC_NAMES = list(windowing._window_func_names)
+WINDOW_FUNC_NAMES.remove('rectangular')  # Remove rectangular window
+
 # Example images
 EXAMPLE_IMG_DIR: typing.Final[pathlib.Path] = pathlib.Path(__file__).parent / 'example_imgs'
 
@@ -139,7 +145,7 @@ class Params:
     kernel_sigma                        : float        = 0.3 * 6 + 0.8                                                          # sigma for pre-filtering. See also: https://docs.pytorch.org/vision/main/generated/torchvision.transforms.functional.gaussian_blur.html
 
     enable_windowing                    : bool         = False                                                                  # switch for windowing
-    window_func                         : int          = 0                                                                      # windowing function
+    window_func                         : int          = WINDOW_FUNC_NAMES.index('Kaiser')                                      # windowing function
 
     apply_padding                       : bool         = False                                                                  # apply zero padding to the image
     padding_factor                      : int          = 4                                                                      # padding factor for the FFT
@@ -147,11 +153,11 @@ class Params:
     img_cmap_id                         : int          = 5                                                                      # color map ID for the sinusoidal image, by default 'gray'
     psd_cmap_id                         : int          = 1                                                                      # color map ID for the power spectral density, by default 'plasma'
 
-    psd_profile_ylim_fixed               : bool         = False                                                                  # fix the y-limits of the radial and axial power spectral density plot
-    psd_profile_ylim_min                 : float        = 1e-12                                                                  # minimum y-limit for the radial and axial power spectral density plot
-    psd_profile_ylim_max                 : float        = 1e2                                                                    # maximum y-limit for the radial and axial power spectral density plot
-    psd_profile_xscale_log               : bool         = False                                                                  # show x axis in log10 scale?
-    psd_profile_yscale_log               : bool         = True                                                                   # show y axis in log10 scale?
+    psd_profile_ylim_fixed              : bool         = False                                                                  # fix the y-limits of the radial and axial power spectral density plot
+    psd_profile_ylim_min                : float        = 1e-12                                                                  # minimum y-limit for the radial and axial power spectral density plot
+    psd_profile_ylim_max                : float        = 1e2                                                                    # maximum y-limit for the radial and axial power spectral density plot
+    psd_profile_xscale_log              : bool         = False                                                                  # show x axis in log10 scale?
+    psd_profile_yscale_log              : bool         = True                                                                   # show y axis in log10 scale?
 
     windowfn_instances                  : dict[str, windowing.WindowFunctionBase] = pydantic.Field(default_factory=dict)        # window functions, instantiated in the __post_init__ method
     # autopep8: on
@@ -218,29 +224,6 @@ class ImageFile:
 
 
 # --------------------------------------------------------------------------------------------------------------------------------------------------------
-# utilities
-
-
-def to_cuda_device(x: torch.Tensor) -> torch.Tensor:
-    """Copy the input tensor to the CUDA device if available.
-
-    Parameters
-    ----------
-    x : torch.Tensor
-        Input tensor to be copied.
-
-    Returns
-    -------
-    torch.Tensor
-        Copied tensor on the CUDA device if available, otherwise the original tensor.
-    """
-
-    if torch.cuda.is_available():
-        return x.cuda()
-
-    return x
-
-# --------------------------------------------------------------------------------------------------------------------------------------------------------
 # Viewer
 
 
@@ -258,20 +241,26 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
 
     KEYS                                  = [KEY_INPUT, KEY_MASKED, KEY_MASKED_INPUT]
 
-    MIN_IMG_SIZE      : int               = 8
-    MAX_IMG_SIZE      : int               = 2048
+    MIN_IMG_SIZE      : int               = 4
+    MAX_IMG_SIZE      : int               = 2048 # 256 is already heavy with padding even if using CUDA backend ...
 
     PARAMS_CACHE_PATH : pathlib.Path      = pathlib.Path('.cache/params.json')
     # autopep8: on
 
     # ------------------------------------------------------------------------------------
 
-    def __init__(self, name, cache_params: bool = False):
+    def __init__(self, name: str, enable_vsync: bool, cache_params: bool = False):
         self.cache_params = cache_params
         self.base_img: ImageFile | None = None
 
         # ------------------------------------------------------------------------------------
-        super().__init__(name, self.KEYS, with_font_awesome=True, with_implot=True)
+        super().__init__(
+            name=name,
+            texture_names=self.KEYS,
+            enable_vsync=enable_vsync,
+            with_font_awesome=True,
+            with_implot=True
+        )
 
     def setup_state(self) -> None:
         """Initialize the state of the visualizer. Called by the super class.
@@ -441,7 +430,7 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         # Compute FFT
 
         # Apply windowing
-        window_name = windowing._window_func_names[self.params.window_func if self.params.enable_windowing else 0]  # '0' means no-op rectangular window
+        window_name = WINDOW_FUNC_NAMES[self.params.window_func] if self.params.enable_windowing else 'rectangular'  # rectangular window is no-op
         window_func = self.params.windowfn_instances[window_name]
         window, window_2d = window_func.calc_window(img.shape[-1], dtype=img.dtype, device=img.device)
 
@@ -732,11 +721,11 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
                 self.params.window_func = imgui.combo(
                     'Window function',
                     self.params.window_func,
-                    windowing._window_func_names,
+                    WINDOW_FUNC_NAMES,
                 )[1]
 
                 imgui.separator_text('Window parameters')
-                window_name = windowing._window_func_names[self.params.window_func]
+                window_name = WINDOW_FUNC_NAMES[self.params.window_func]
                 window_func = self.params.windowfn_instances[window_name]
                 for name, param in window_func.params.items():
                     param.add_slider_and_input(name)
@@ -784,16 +773,32 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
             self.state.params = Params()
 
 
-if __name__ == '__main__':
+# -------------------------------------------------------------------------------------------------------------------------------------------------
+
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description='A high-quality FFT visualization tool',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
-    parser.add_argument(
-        '--cache_params',
-        action='store_true',
-    )
-    args = parser.parse_args()
 
-    _ = FFTVisualizer('FFT Vis', cache_params=args.cache_params)
+    parser.add_argument(
+        '--no_cache',
+        action='store_true',
+        help='Disable caching parameters (except imgui parameters)'
+    )
+    parser.add_argument(
+        '--vsync',
+        action='store_true',
+        help='Enable VSync'
+    )
+
+    return parser.parse_args()
+
+
+if __name__ == '__main__':
+    args = parse_args()
+
+    vis = FFTVisualizer('FFT Vis', enable_vsync=args.vsync, cache_params=not args.no_cache)
     logger.info('Bye!')
+
+# -------------------------------------------------------------------------------------------------------------------------------------------------

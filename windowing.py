@@ -346,6 +346,32 @@ class KaiserWindow(WindowFunctionBase):
         return window, window_2d
 
 
+class TukeyWindow(WindowFunctionBase):
+    def __init__(self):
+        super().__init__()
+
+        self._params = {
+            'alpha': ValueEntity(value=0.5, value_type=float, min_value=0.0, max_value=1.0),
+        }
+
+    def calc_window(self, size: int, dtype: torch.dtype, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
+        alpha = float(self._params['alpha'].value)
+        N = size - 1
+
+        bounb_0 = math.ceil(alpha * N / 2.0)
+        bounb_1 = N // 2
+
+        window = torch.arange(size, dtype=dtype, device=device)
+        window[:bounb_0] = (1.0 - torch.cos(2.0 * torch.pi * window[:bounb_0] / (alpha * N))) / 2.0
+        window[bounb_0:bounb_1 + 1] = 1.0
+        window[-(bounb_1 + 1):] = window[:bounb_1 + 1].flip(0)
+
+        window *= window.square().sum().rsqrt()
+        window_2d = torch.ger(window, window)  # [win_size, win_size]
+
+        return window, window_2d
+
+
 class LanczosWindow(WindowFunctionBase):
     def __init__(self):
         super().__init__()
@@ -381,24 +407,28 @@ _window_func_names: typing.Final[tuple[str]] = [
     'flattop',
     # ----------
     # Other windows
+    'Tukey (cosine-tapered)',
     'Kaiser',
     'Lanczos',
 ]
 
 _window_funcs: dict[str, typing.Type[WindowFunctionBase]] = {
-    'rectangular': RectangualrWindow,
-    'triangular': TriangularWindow,
-    'Parzen': ParzenWindow,
-    'Welch': WelchWindow,
-    'Hann': HannWindow,
-    'Hamming': HammingWindow,
-    'exponential': ExponentialWindow,
-    'exponential_sym': ExponentialSymmetricWindow,
-    'Nuttall': NuttallWindow,
-    'Blackman': BackmanWindow,
-    'flattop': FlatTopWindow,
-    'Kaiser': KaiserWindow,
-    'Lanczos': LanczosWindow,
+    # autopep8: off
+    'rectangular'                     : RectangualrWindow,
+    'triangular'                      : TriangularWindow,
+    'Parzen'                          : ParzenWindow,
+    'Welch'                           : WelchWindow,
+    'Hann'                            : HannWindow,
+    'Hamming'                         : HammingWindow,
+    'exponential'                     : ExponentialWindow,
+    'exponential_sym'                 : ExponentialSymmetricWindow,
+    'Nuttall'                         : NuttallWindow,
+    'Blackman'                        : BackmanWindow,
+    'flattop'                         : FlatTopWindow,
+    'Kaiser'                          : KaiserWindow,
+    'Tukey (cosine-tapered)'          : TukeyWindow,
+    'Lanczos'                         : LanczosWindow,
+    # autopep8: on
 }
 
 # -------------------------------------------------------------------------------------------------------------------------------------------------
@@ -481,3 +511,5 @@ if __name__ == '__main__':
             pass
 
     _ = WindowingDemo('Windowing Functions Demo')
+
+# -------------------------------------------------------------------------------------------------------------------------------------------------

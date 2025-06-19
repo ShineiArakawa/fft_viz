@@ -1,22 +1,22 @@
 [project]
 name = "fft-viz"
-version = "0.6.0"
+version = "0.7.0"
 description = "A high-quality FFT visualization tool"
 readme = "README.md"
+license = { file = "LICENSE" }
 requires-python = ">=3.11"
 dependencies = [
-    "imgui-bundle",
-    "loguru",
+    "loguru>=0.7.3",
     "nfdpy",
-    "numpy",
-    "pydantic",
+    "numpy>=2.3.0",
+    "pydantic>=2.11.7",
     "pyviewer-extended",
     "radpsd",
-    "torch",
-    "torchvision",
+    "torch>=2.7.1",
+    "torchvision>=0.22.1",
 ]
 
 [tool.uv.sources]
-nfdpy = { git = "https://github.com/ShineiArakawa/nfdpy.git" }
-pyviewer-extended = { git = "https://github.com/ShineiArakawa/pyviewer-extended.git" }
-radpsd = { git = "https://github.com/ShineiArakawa/radpsd.git" }
+nfdpy = { git = "https://github.com/ShineiArakawa/nfdpy.git", tag = "v0.1.2" }
+pyviewer-extended = { git = "https://github.com/ShineiArakawa/pyviewer-extended.git", tag = "v0.6.0" }
+radpsd = { git = "https://github.com/ShineiArakawa/radpsd.git", tag = "v1.1.2" }
