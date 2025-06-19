@@ -16,3 +16,5 @@ torch==2.7.1
     # via fft-viz (pyproject.toml)
 torchvision==0.22.1
     # via fft-viz (pyproject.toml)
+typing-extensions==4.14.0
+    # via fft-viz (pyproject.toml)

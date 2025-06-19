@@ -26,8 +26,8 @@ import radpsd.signal as _signal
 import radpsd.torch_util as _torch_util
 import torchvision.io as io
 import torchvision.transforms.v2.functional as F
+import typing_extensions
 from imgui_bundle import imgui, implot
-from imgui_bundle.glfw_utils import glfw # Do not import glfw directly because imgui has its own pre-build glfw to be linked.
 
 import util
 import windowing
@@ -169,28 +169,27 @@ class Params:
 
     IO_BOUND = [int, float, bool, pathlib.Path]
 
-    def load(self, file_path: pathlib.Path) -> None:
-        with open(file_path, mode='r') as file:
-            params_dict = json.load(file)
-
+    def load(self, params: dict) -> Params:
         for field in dataclasses.fields(Params):
             param_name = field.name
             param_value = getattr(self, param_name)
 
-            if param_name not in params_dict or param_value is None:
+            if param_name not in params or param_value is None:
                 continue
 
             for target_type in self.IO_BOUND:
                 if isinstance(param_value, target_type):
                     if isinstance(param_value, pathlib.Path):
-                        param_value = pathlib.Path(params_dict[param_name])
+                        param_value = pathlib.Path(params[param_name])
                     else:
-                        param_value = params_dict[param_name]
+                        param_value = params[param_name]
 
                     setattr(self, param_name, param_value)
                     break
 
-    def dump(self, file_path: pathlib.Path) -> Params:
+        return self
+
+    def dump(self) -> dict:
         params_dict = {}
 
         for field in dataclasses.fields(Params):
@@ -209,11 +208,7 @@ class Params:
                     params_dict[param_name] = param_value
                     break
 
-        file_path = file_path.resolve()
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-
-        with open(file_path, mode='w') as file:
-            json.dump(params_dict, file, indent=4, ensure_ascii=False)
+        return params_dict
 
 
 @pydantic.dataclasses.dataclass(config=pydantic.dataclasses.ConfigDict(arbitrary_types_allowed=True))
@@ -245,12 +240,18 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
     MAX_IMG_SIZE      : int               = 2048 # 256 is already heavy with padding even if using CUDA backend ...
 
     PARAMS_CACHE_PATH : pathlib.Path      = pathlib.Path('.cache/params.json')
+
+    NUM_PARAMS_CACHES : int               = 9 # shuould be <10 due to the limit of number keys
     # autopep8: on
 
     # ------------------------------------------------------------------------------------
 
     def __init__(self, name: str, enable_vsync: bool, cache_params: bool = False):
-        self.cache_params = cache_params
+        self.cur_cache_param_id = 0
+        self.cached_params: list[Params] = [Params() for _ in range(self.NUM_PARAMS_CACHES)]
+
+        self.cache_params_to_file = cache_params
+
         self.base_img: ImageFile | None = None
 
         # ------------------------------------------------------------------------------------
@@ -262,6 +263,7 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
             with_implot=True
         )
 
+    @typing_extensions.override
     def setup_state(self) -> None:
         """Initialize the state of the visualizer. Called by the super class.
         """
@@ -280,14 +282,39 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         self.state.axial_psd_v = None
 
         # Load params
-        if self.cache_params and self.PARAMS_CACHE_PATH.is_file():
-            self.state.params.load(self.PARAMS_CACHE_PATH)
-            print(f'Loaded parameters from {self.PARAMS_CACHE_PATH}')
+        if self.cache_params_to_file and self.PARAMS_CACHE_PATH.is_file():
+            with open(self.PARAMS_CACHE_PATH, mode='r') as file:
+                params = json.load(file)
 
+            if params is not None and isinstance(params, list):
+                for i_param, param_dict in enumerate(params):
+                    if i_param >= len(self.cached_params):
+                        continue
+                    self.cached_params[i_param].load(param_dict)
+
+                self.state.params = self.cached_params[self.cur_cache_param_id]
+
+                print(f'Loaded parameters from {self.PARAMS_CACHE_PATH}')
+            else:
+                print(f'Failed to load parameters from {self.PARAMS_CACHE_PATH}')
+
+        # Update param cache
+        self.cached_params[self.cur_cache_param_id] = self.state.params
+
+    @typing_extensions.override
     def save_settings(self) -> None:
-        if self.cache_params:
-            self.state.params.dump(self.PARAMS_CACHE_PATH)
-            print(f'Saved parameters to {self.PARAMS_CACHE_PATH}')
+        if self.cache_params_to_file:
+            params: list[dict] = []
+            for cached_param in self.cached_params:
+                params.append(cached_param.dump())
+
+            cache_file = self.PARAMS_CACHE_PATH.resolve()
+            cache_file.parent.mkdir(parents=True, exist_ok=True)
+
+            with open(cache_file, mode='w', encoding='utf8') as file:
+                json.dump(params, file, indent=4, ensure_ascii=False)
+
+            print(f'Saved parameters to {cache_file}')
 
     @property
     def params(self) -> Params | None:
@@ -312,6 +339,7 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
 
         return 'viridis'
 
+    @typing_extensions.override
     def compute(self) -> dict[str, np.ndarray]:
         # Check if the parameters have changed
         if self.state.prev_params is not None and self.state.prev_params == self.params:
@@ -654,6 +682,31 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         """
 
         # ---------------------------------------------------------------------------------------------------
+        # Parameter caching
+
+        # Detect arrow key
+        if self.keyhit(imgui.Key.right_arrow):
+            self.cur_cache_param_id = (self.cur_cache_param_id + 1) % self.NUM_PARAMS_CACHES
+        elif self.keyhit(imgui.Key.left_arrow):
+            self.cur_cache_param_id = (self.cur_cache_param_id - 1) % self.NUM_PARAMS_CACHES
+
+        # Detect number key
+        for i_cache in range(self.NUM_PARAMS_CACHES):
+            key = getattr(imgui.Key, f'_{i_cache + 1}')
+            if self.keyhit(key):
+                self.cur_cache_param_id = i_cache
+
+        imgui.separator_text('Current Param')
+        for i_cache in range(self.NUM_PARAMS_CACHES):
+            if i_cache != 0:
+                imgui.same_line()
+
+            if imgui.radio_button(f'##Param{i_cache}', self.cur_cache_param_id == i_cache) or self.cur_cache_param_id == i_cache:
+                self.cur_cache_param_id = i_cache
+                self.state.params = self.cached_params[self.cur_cache_param_id]
+        imgui.text('Tips: switch them with "arrow" or "number" keys')
+
+        # ---------------------------------------------------------------------------------------------------
         # Parameters for the noise
         if imgui.collapsing_header('Input', flags=imgui.TreeNodeFlags_.default_open):
             imgui.separator_text('Image')
@@ -769,8 +822,14 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         imgui.separator()
 
         # ---------------------------------------------------------------------------------------------------
-        if imgui.button('Reset all params', size=(-1, 40)):
+        # Reset button
+
+        if imgui.button('Reset params', size=(-1, 40)):
             self.state.params = Params()
+
+        # ---------------------------------------------------------------------------------------------------
+        # Cache param
+        self.cached_params[self.cur_cache_param_id] = self.params
 
 
 # -------------------------------------------------------------------------------------------------------------------------------------------------
