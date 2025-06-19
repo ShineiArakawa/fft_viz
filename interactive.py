@@ -685,15 +685,17 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         # Parameter caching
 
         # Detect arrow key
-        if self.keyhit(imgui.Key.right_arrow):
-            self.cur_cache_param_id = (self.cur_cache_param_id + 1) % self.NUM_PARAMS_CACHES
-        elif self.keyhit(imgui.Key.left_arrow):
-            self.cur_cache_param_id = (self.cur_cache_param_id - 1) % self.NUM_PARAMS_CACHES
+        is_any_item_active = imgui.is_any_item_active()
+        if not is_any_item_active:  # Except when inputting values ...
+            if self.keyhit(imgui.Key.right_arrow):
+                self.cur_cache_param_id = (self.cur_cache_param_id + 1) % self.NUM_PARAMS_CACHES
+            elif not imgui.is_any_item_active() and self.keyhit(imgui.Key.left_arrow):
+                self.cur_cache_param_id = (self.cur_cache_param_id - 1) % self.NUM_PARAMS_CACHES
 
         # Detect number key
         for i_cache in range(self.NUM_PARAMS_CACHES):
             key = getattr(imgui.Key, f'_{i_cache + 1}')
-            if self.keyhit(key):
+            if not is_any_item_active and self.keyhit(key):  # Except when inputting values ...
                 self.cur_cache_param_id = i_cache
 
         imgui.separator_text('Current Param')
@@ -708,6 +710,8 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
 
         # ---------------------------------------------------------------------------------------------------
         # Parameters for the noise
+
+        imgui.separator()
         if imgui.collapsing_header('Input', flags=imgui.TreeNodeFlags_.default_open):
             imgui.separator_text('Image')
 
@@ -748,23 +752,24 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
             imgui.separator_text('Geometric transformation')
             self.params.rotate = imgui.slider_float('Rotation angle', self.params.rotate, 0.0, 360.0)[1]
 
-            imgui.separator_text('Super sampling')
-            if self.params.img_mode == ImageMode.sinusoidal:
-                self.params.enable_super_sampling = imgui.checkbox('Enable super sampling', self.params.enable_super_sampling)[1]
-                self.params.super_sampling_factor = imgui.slider_int('Super sampling factor', self.params.super_sampling_factor, 1, 4)[1]
-            else:
-                imgui.text('Super sampling is disabled for file images')
+            if imgui.collapsing_header('Super sampling'):
+                if self.params.img_mode == ImageMode.sinusoidal:
+                    self.params.enable_super_sampling = imgui.checkbox('Enable super sampling', self.params.enable_super_sampling)[1]
+                    self.params.super_sampling_factor = imgui.slider_int('Super sampling factor', self.params.super_sampling_factor, 1, 4)[1]
+                else:
+                    imgui.text('Super sampling is disabled for file images')
 
-            imgui.separator_text('Pre-filtering')
-            self.params.enable_pre_filering = imgui.checkbox('Enable pre-filtering', self.params.enable_pre_filering)[1]
-            self.params.pre_filter_padding = imgui.slider_int('Padding (reflection)', self.params.pre_filter_padding, 0, 32)[1]
-            kernel_size = imgui.slider_int('Kernel size', self.params.kernel_size, 3, 31)[1]
-            self.params.kernel_size = kernel_size + 1 if kernel_size % 2 == 0 else kernel_size
-            self.params.kernel_sigma = imgui.slider_float('Kernel sigma', self.params.kernel_sigma, 0.01, 10.0)[1]
+            if imgui.collapsing_header('Pre-filtering'):
+                self.params.enable_pre_filering = imgui.checkbox('Enable pre-filtering', self.params.enable_pre_filering)[1]
+                self.params.pre_filter_padding = imgui.slider_int('Padding (reflection)', self.params.pre_filter_padding, 0, 32)[1]
+                kernel_size = imgui.slider_int('Kernel size', self.params.kernel_size, 3, 31)[1]
+                self.params.kernel_size = kernel_size + 1 if kernel_size % 2 == 0 else kernel_size
+                self.params.kernel_sigma = imgui.slider_float('Kernel sigma', self.params.kernel_sigma, 0.01, 10.0)[1]
 
         # ---------------------------------------------------------------------------------------------------
         # FFT parameters
 
+        imgui.separator()
         if imgui.collapsing_header('Windowing', flags=imgui.TreeNodeFlags_.default_open):
             imgui.push_id('enable_windowing')
             self.params.enable_windowing = imgui.checkbox('Enable', self.params.enable_windowing)[1]
@@ -796,6 +801,7 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
                     implot.plot_line(f'{window_name} window', self.state.window)
                     implot.end_plot()
 
+        imgui.separator()
         if imgui.collapsing_header('Padding', flags=imgui.TreeNodeFlags_.default_open):
             imgui.push_id('enable_padding')
             self.params.apply_padding = imgui.checkbox('Enable', self.params.apply_padding)[1]
@@ -806,6 +812,8 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
 
         # ---------------------------------------------------------------------------------------------------
         # Visualization parameters
+
+        imgui.separator()
         if imgui.collapsing_header('Visualization', flags=imgui.TreeNodeFlags_.default_open):
             imgui.separator_text('Color maps')
             self.params.img_cmap_id = imgui.combo('Image color map', self.params.img_cmap_id, MPL_CMAPS)[1]
@@ -824,6 +832,7 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         # ---------------------------------------------------------------------------------------------------
         # Reset button
 
+        imgui.separator()
         if imgui.button('Reset params', size=(-1, 40)):
             self.state.params = Params()
 
