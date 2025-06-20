@@ -465,6 +465,8 @@ if __name__ == '__main__':
             self.state.window_1d = None
             self.state.window_img = None
 
+            self.state.psd_img = None
+
         def compute(self):
             window_func: WindowFunctionBase = self.state.window_func[_window_func_names[self.state.window]]
 
@@ -472,10 +474,15 @@ if __name__ == '__main__':
                 self.state.window_size, dtype=dtype, device=device
             )
 
-            window_2d = window_2d.unsqueeze(-1).tile(1, 1, 3).to(torch.float32)
-
-            self.state.window_img = util.normalize_0_to_1(window_2d,  based_on_min_max=True)
+            self.state.window_img = util.normalize_0_to_1(window_2d.unsqueeze(-1).tile(1, 1, 3).to(torch.float32),  based_on_min_max=True)
             self.state.window_1d = np.ascontiguousarray(window_1d.cpu().numpy().astype(np.float64))
+
+            # fft
+            spectrum = torch.fft.fftn(window_2d, dim=(-2, -1)).abs().square()
+            spectrum = torch.fft.fftshift(spectrum, dim=(-2, -1))
+            psd = spectrum / (window_2d.shape[-2] * window_2d.shape[-1])
+            psd_plot = 10.0 * torch.log10(psd + 1e-10)  # to decibels
+            self.state.psd_img = np.ascontiguousarray(psd_plot.cpu().numpy()).astype(np.float32)
 
             return {
                 self.KEY_WINDOW: self.state.window_img,
@@ -495,6 +502,47 @@ if __name__ == '__main__':
                 )
                 implot.plot_line(window_name, self.state.window_1d)
                 implot.end_plot()
+
+        @pyviewer_extended.dockable
+        def window_psd_plot(self):
+            x_avail, _ = imgui.get_content_region_avail()
+            color_bar_prop = 0.10  # 10% for the color bar
+            plot_width = x_avail * (1.0 - color_bar_prop)
+            color_bar_width = x_avail - plot_width
+
+            cmap = getattr(implot.Colormap_, 'plasma', None)
+            if cmap is not None:
+                implot.push_colormap(cmap.value)
+
+            if self.state.psd_img is not None:
+                psd_img = self.state.psd_img
+                scale_min = np.min(psd_img)
+                scale_max = np.max(psd_img)
+
+                if implot.begin_plot(
+                    'Power Spectral Density',
+                    size=(plot_width, -1),
+                    flags=implot.Flags_.no_legend.value | implot.Flags_.equal.value
+                ):
+
+                    half_size = self.state.window_size // 2
+
+                    implot.setup_axes("Frequency [wave number]", "Frequency [wave number]")
+                    implot.setup_axes_limits(-half_size, half_size, -half_size, half_size)
+                    implot.plot_heatmap(
+                        label_id='Heat Power Spectral Density',
+                        values=psd_img,
+                        scale_min=scale_min,
+                        scale_max=scale_max,
+                        bounds_min=implot.Point(-half_size, -half_size),
+                        bounds_max=implot.Point(half_size, half_size),
+                        label_fmt='',
+                    )
+
+                    implot.end_plot()
+
+                imgui.same_line()
+                implot.colormap_scale("Power Spectral Density [dB]", scale_min, scale_max, size=(color_bar_width, -1))
 
         @pyviewer_extended.dockable
         def toolbar(self):
