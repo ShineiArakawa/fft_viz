@@ -281,40 +281,55 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         self.state.axial_psd_h = None
         self.state.axial_psd_v = None
 
+        self.state.params_cache_file = self.PARAMS_CACHE_PATH
+
         # Load params
         if self.cache_params_to_file and self.PARAMS_CACHE_PATH.is_file():
-            with open(self.PARAMS_CACHE_PATH, mode='r') as file:
-                params = json.load(file)
-
-            if params is not None and isinstance(params, list):
-                for i_param, param_dict in enumerate(params):
-                    if i_param >= len(self.cached_params):
-                        continue
-                    self.cached_params[i_param].load(param_dict)
-
-                self.state.params = self.cached_params[self.cur_cache_param_id]
-
-                print(f'Loaded parameters from {self.PARAMS_CACHE_PATH}')
-            else:
-                print(f'Failed to load parameters from {self.PARAMS_CACHE_PATH}')
+            self.load_param_caches(self.PARAMS_CACHE_PATH)
 
         # Update param cache
         self.cached_params[self.cur_cache_param_id] = self.state.params
 
+    def load_param_caches(self, file_path: pathlib.Path) -> None:
+        with open(file_path, mode='r') as file:
+            params = json.load(file)
+
+        if params is not None and isinstance(params, list):
+            for i_param, param_dict in enumerate(params):
+                if i_param >= len(self.cached_params):
+                    continue
+                self.cached_params[i_param].load(param_dict)
+
+            self.state.params = self.cached_params[self.cur_cache_param_id]
+
+            print(f'Loaded parameters from {file_path}')
+        else:
+            print(f'Failed to load parameters from {file_path}')
+
+    def save_param_caches(self, file_path: pathlib.Path) -> None:
+        params: list[dict] = []
+        for cached_param in self.cached_params:
+            params.append(cached_param.dump())
+
+        cache_file = file_path.resolve()
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(cache_file, mode='w', encoding='utf8') as file:
+            json.dump(params, file, indent=4, ensure_ascii=False)
+
+        print(f'Saved parameters to {cache_file}')
+
     @typing_extensions.override
     def save_settings(self) -> None:
         if self.cache_params_to_file:
-            params: list[dict] = []
-            for cached_param in self.cached_params:
-                params.append(cached_param.dump())
+            self.save_param_caches(self.PARAMS_CACHE_PATH)
 
-            cache_file = self.PARAMS_CACHE_PATH.resolve()
-            cache_file.parent.mkdir(parents=True, exist_ok=True)
-
-            with open(cache_file, mode='w', encoding='utf8') as file:
-                json.dump(params, file, indent=4, ensure_ascii=False)
-
-            print(f'Saved parameters to {cache_file}')
+    @typing_extensions.override
+    def drag_and_drop_callback(self, paths):
+        if paths is not None and len(paths) > 0:
+            cache_path: pathlib.Path = paths[0]
+            if cache_path.is_file():
+                self.load_param_caches(cache_path)
 
     @property
     def params(self) -> Params | None:
@@ -544,6 +559,20 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         if img_path is not None:
             self.params.img_path = pathlib.Path(img_path)
 
+    def open_param_cache_file_dialog(self) -> None:
+        if self.state.params_cache_file.is_file():
+            cache_file = self.state.params_cache_file.resolve()
+            default_path = str(cache_file.parent)
+            default_name = cache_file.name
+        else:
+            default_path = str(pathlib.Path.cwd())
+            default_name = 'params.json'
+
+        cache_path = nfdpy.save_file_dialog(filters={'Param file': 'json'}, default_path=default_path, default_name=default_name)
+        if cache_path is not None:
+            self.state.params_cache_file = pathlib.Path(cache_path)
+            self.save_param_caches(self.state.params_cache_file)
+
     @pyviewer_extended.dockable
     def psd_plot(self) -> None:
         # ---------------------------------------------------------------------------------------------------
@@ -741,8 +770,10 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
             else:
                 self.params.img_path = pathlib.Path(imgui.input_text('Image path', str(self.params.img_path))[1])
                 imgui.same_line()
+                imgui.push_id('Open img file selection dialog')
                 if imgui.button('Open'):
                     self.open_img_file_dialog()
+                imgui.pop_id()
 
             imgui.separator_text('Image size')
             self.params.img_size = imgui.input_int('##Image size input', self.params.img_size)[1]
@@ -835,6 +866,19 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         imgui.separator()
         if imgui.button('Reset params', size=(-1, 40)):
             self.state.params = Params()
+
+        # ---------------------------------------------------------------------------------------------------
+        if self.cache_params_to_file:
+            imgui.separator()
+            self.state.params_cache_file = pathlib.Path(imgui.input_text('Param cache', str(self.state.params_cache_file))[1])
+            imgui.same_line()
+            imgui.push_id('Open param cache file selection dialog')
+            if imgui.button('Open'):
+                self.open_param_cache_file_dialog()
+            imgui.pop_id()
+            imgui.same_line()
+            if imgui.button('Save'):
+                self.save_param_caches(self.state.params_cache_file)
 
         # ---------------------------------------------------------------------------------------------------
         # Cache param
