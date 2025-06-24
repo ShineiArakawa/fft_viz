@@ -1,6 +1,6 @@
 [project]
 name = "fft-viz"
-version = "1.0.0"
+version = "1.0.1"
 description = "A high-quality FFT visualization tool"
 readme = "README.md"
 license = { file = "LICENSE" }

@@ -2,7 +2,7 @@
 #    uv pip compile --no-deps --output-file requirements.txt --format requirements.txt --universal pyproject.toml
 loguru==0.7.3
     # via fft-viz (pyproject.toml)
-nfdpy @ git+https://github.com/ShineiArakawa/nfdpy.git@4ebb8810562c993739f15cb265c646afc42b8eb4
+nfdpy @ git+https://github.com/ShineiArakawa/nfdpy.git@f5f4d369f3104dbc3e744890620e665d74684db6
     # via fft-viz (pyproject.toml)
 numpy==2.3.0
     # via fft-viz (pyproject.toml)
