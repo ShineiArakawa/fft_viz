@@ -8,102 +8,14 @@ import abc
 import copy
 import math
 import typing
-import uuid
 
-import pydantic.config as config
-import pydantic.dataclasses as dataclasses 
 import torch
-from imgui_bundle import imgui
 
 import util
-
+from imgui_bundle import imgui
 # autopep8: on
 
 logger = util.get_logger()
-
-# --------------------------------------------------------------------------------------------------------------------------------------------------------
-
-ValueTypes = typing.TypeVar('ValueTypes', int, float)
-
-
-@dataclasses.dataclass(config=config.ConfigDict(arbitrary_types_allowed=True))
-class ValueEntity:
-    value: ValueTypes
-    value_type: typing.Type[ValueTypes]
-    min_value: typing.Optional[ValueTypes] = None
-    max_value: typing.Optional[ValueTypes] = None
-
-    id: str = None
-
-    def __post_init__(self):
-        self.id = uuid.uuid4().hex
-
-    def add_slider(self, name: str, hide_label: bool = False) -> ValueTypes:
-        prefix = '## ' if hide_label else ''
-
-        imgui.push_id(f'{name}_slider_{self.id}')
-
-        value: ValueTypes = None
-        if self.value_type is int:
-            value = imgui.slider_int(
-                prefix + name,
-                self.value,
-                self.min_value if self.min_value is not None else 0,
-                self.max_value if self.max_value is not None else 100,
-            )[1]
-        elif self.value_type is float:
-            value = imgui.slider_float(
-                prefix + name,
-                self.value,
-                self.min_value if self.min_value is not None else 0.0,
-                self.max_value if self.max_value is not None else 1.0,
-            )[1]
-        else:
-            raise TypeError(f'Unsupported value type: {name}')
-
-        imgui.pop_id()
-
-        self.value = self.value_type(value)
-
-        return self.value
-
-    def add_input(self, name: str, hide_label: bool = False) -> ValueTypes:
-        prefix = '## ' if hide_label else ''
-
-        imgui.push_id(f'{name}_input_{self.id}')
-
-        value: ValueTypes = None
-        if self.value_type is int:
-            value = imgui.input_int(
-                prefix + name,
-                self.value,
-            )[1]
-        elif self.value_type is float:
-            value = imgui.input_float(
-                prefix + name,
-                self.value,
-            )[1]
-        else:
-            raise TypeError(f'Unsupported value type: {name}')
-
-        imgui.pop_id()
-
-        self.value = self.value_type(value)
-
-        return self.value
-
-    def add_slider_and_input(self, name: str) -> ValueTypes:
-        """Add both slider and input for the value entity."""
-
-        imgui.text(f'{name} Slider')
-        imgui.same_line()
-        self.add_slider(name, hide_label=True)
-
-        imgui.text(f'{name} Input')
-        imgui.same_line()
-        self.add_input(name, hide_label=True)
-
-        return self.value
 
 
 # --------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -115,18 +27,18 @@ class WindowFunctionBase(metaclass=abc.ABCMeta):
     """
 
     def __init__(self):
-        self._params: dict[str, ValueEntity] = {}
+        self._params: dict[str, util.ValueEntity] = {}
 
     @property
-    def params(self) -> dict[str, ValueEntity]:
+    def params(self) -> dict[str, util.ValueEntity]:
         pass
 
     @params.setter
-    def params(self, params: dict[str, ValueEntity]) -> None:
+    def params(self, params: dict[str, util.ValueEntity]) -> None:
         self._params = copy.deepcopy(params)
 
     @params.getter  # See also: https://en.wikipedia.org/wiki/Window_function
-    def params(self) -> dict[str, ValueEntity]:
+    def params(self) -> dict[str, util.ValueEntity]:
         return self._params
 
     @abc.abstractmethod
@@ -221,8 +133,8 @@ class HammingWindow(WindowFunctionBase):
         super().__init__()
 
         self._params = {
-            'alpha': ValueEntity(value=25.0 / 46.0, value_type=float, min_value=0.0, max_value=1.0),
-            'beta': ValueEntity(value=1.0 - 0.46164, value_type=float, min_value=0.0, max_value=1.0),
+            'alpha': util.ValueEntity(value=25.0 / 46.0, value_type=float, min_value=0.0, max_value=1.0),
+            'beta': util.ValueEntity(value=1.0 - 0.46164, value_type=float, min_value=0.0, max_value=1.0),
         }
 
     def calc_window(self, size: int, dtype: torch.dtype, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
@@ -240,7 +152,7 @@ class ExponentialWindow(WindowFunctionBase):
         super().__init__()
 
         self._params = {
-            'tau': ValueEntity(value=1.0, value_type=float, min_value=0.01, max_value=10.0),
+            'tau': util.ValueEntity(value=1.0, value_type=float, min_value=0.01, max_value=10.0),
         }
 
     def calc_window(self, size: int, dtype: torch.dtype, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
@@ -256,7 +168,7 @@ class ExponentialSymmetricWindow(WindowFunctionBase):
         super().__init__()
 
         self._params = {
-            'sigma': ValueEntity(value=1.0, value_type=float, min_value=0.01, max_value=5.0),
+            'sigma': util.ValueEntity(value=1.0, value_type=float, min_value=0.01, max_value=5.0),
         }
 
     def calc_window(self, size: int, dtype: torch.dtype, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
@@ -301,11 +213,11 @@ class FlatTopWindow(WindowFunctionBase):
         super().__init__()
 
         self._params = {
-            'a_0': ValueEntity(value=0.21557895, value_type=float, min_value=0.0, max_value=1.0),
-            'a_1': ValueEntity(value=0.41663158, value_type=float, min_value=0.0, max_value=1.0),
-            'a_2': ValueEntity(value=0.277263158, value_type=float, min_value=0.0, max_value=1.0),
-            'a_3': ValueEntity(value=0.083578947, value_type=float, min_value=0.0, max_value=1.0),
-            'a_4': ValueEntity(value=0.006947368, value_type=float, min_value=0.0, max_value=1.0),
+            'a_0': util.ValueEntity(value=0.21557895, value_type=float, min_value=0.0, max_value=1.0),
+            'a_1': util.ValueEntity(value=0.41663158, value_type=float, min_value=0.0, max_value=1.0),
+            'a_2': util.ValueEntity(value=0.277263158, value_type=float, min_value=0.0, max_value=1.0),
+            'a_3': util.ValueEntity(value=0.083578947, value_type=float, min_value=0.0, max_value=1.0),
+            'a_4': util.ValueEntity(value=0.006947368, value_type=float, min_value=0.0, max_value=1.0),
         }
 
     def calc_window(self, size: int, dtype: torch.dtype, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
@@ -335,7 +247,7 @@ class KaiserWindow(WindowFunctionBase):
         super().__init__()
 
         self._params = {
-            'beta': ValueEntity(value=8.0, value_type=float, min_value=0.0, max_value=100.0),
+            'beta': util.ValueEntity(value=8.0, value_type=float, min_value=0.0, max_value=100.0),
         }
 
     def calc_window(self, size: int, dtype: torch.dtype, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
@@ -351,7 +263,7 @@ class TukeyWindow(WindowFunctionBase):
         super().__init__()
 
         self._params = {
-            'alpha': ValueEntity(value=0.5, value_type=float, min_value=0.0, max_value=1.0),
+            'alpha': util.ValueEntity(value=0.5, value_type=float, min_value=0.0, max_value=1.0),
         }
 
     def calc_window(self, size: int, dtype: torch.dtype, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
@@ -387,7 +299,7 @@ class LanczosWindow(WindowFunctionBase):
         return window, window_2d  # Lanczos window is normalized by its sum, not square root of sum of squares.
 
 
-_window_func_names: typing.Final[tuple[str]] = [
+_window_func_names: typing.Final[tuple[str]] = (
     'rectangular',
     'triangular',
     'Parzen',
@@ -410,7 +322,7 @@ _window_func_names: typing.Final[tuple[str]] = [
     'Tukey (cosine-tapered)',
     'Kaiser',
     'Lanczos',
-]
+)
 
 _window_funcs: dict[str, typing.Type[WindowFunctionBase]] = {
     # autopep8: off
@@ -555,7 +467,7 @@ if __name__ == '__main__':
             imgui.separator_text('Parameters')
             window_func: WindowFunctionBase = self.state.window_func[_window_func_names[self.state.window]]
             for name, param in window_func.params.items():
-                param.add_slider_and_input(name)
+                param.draw_param_widgets(name)
             pass
 
     _ = WindowingDemo('Windowing Functions Demo')

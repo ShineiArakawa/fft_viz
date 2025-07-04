@@ -2,10 +2,18 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "interactive vis",
+            "name": "FFT vis",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/interactive.py",
+            "program": "${workspaceFolder}/fft_vis.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+        },
+        {
+            "name": "FIR vis",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/fir_vis.py",
             "console": "integratedTerminal",
             "justMyCode": false,
         },

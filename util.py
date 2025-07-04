@@ -5,11 +5,16 @@ import logging
 import os
 import sys
 import typing
+import uuid
 
 import numpy as np
+import pydantic.config as config
+import pydantic.dataclasses as dataclasses
 import torch
+from imgui_bundle import imgui
 
 ArrayLike = typing.TypeVar('ArrayLike', np.ndarray, torch.Tensor)
+
 
 # ----------------------------------------------------------------------------------------------------------------------------------------------------------
 
@@ -110,3 +115,122 @@ def get_logger(
         raise RuntimeError(f"Unknown logger type: {logger_type}")
 
     return logger
+
+# --------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+ValueTypes = typing.TypeVar('ValueTypes', int, float, bool)
+
+
+@dataclasses.dataclass(config=config.ConfigDict(arbitrary_types_allowed=True))
+class ValueEntity:
+    """Offering flexible parameter handling with imgui
+    """
+
+    value: ValueTypes
+    value_type: typing.Type[ValueTypes]
+    min_value: typing.Optional[ValueTypes] = None
+    max_value: typing.Optional[ValueTypes] = None
+
+    id: str = None
+
+    def __post_init__(self):
+        self.id = self.id or uuid.uuid4().hex
+
+    def _draw_slider_widget(self, name: str, hide_label: bool = False) -> ValueTypes:
+        prefix = '## ' if hide_label else ''
+
+        imgui.push_id(f'{name}_slider_{self.id}')
+
+        value: ValueTypes = None
+        if self.value_type is int:
+            value = imgui.slider_int(
+                prefix + name,
+                self.value,
+                self.min_value if self.min_value is not None else 0,
+                self.max_value if self.max_value is not None else 100,
+            )[1]
+        elif self.value_type is float:
+            value = imgui.slider_float(
+                prefix + name,
+                self.value,
+                self.min_value if self.min_value is not None else 0.0,
+                self.max_value if self.max_value is not None else 1.0,
+            )[1]
+        else:
+            raise TypeError(f'Unsupported value type for {name}: {self.value_type}')
+
+        imgui.pop_id()
+
+        self.value = self.value_type(value)
+
+        return self.value
+
+    def _draw_input_widget(self, name: str, hide_label: bool = False) -> ValueTypes:
+        prefix = '## ' if hide_label else ''
+
+        imgui.push_id(f'{name}_input_{self.id}')
+
+        value: ValueTypes = None
+        if self.value_type is int:
+            value = imgui.input_int(
+                prefix + name,
+                self.value,
+            )[1]
+        elif self.value_type is float:
+            value = imgui.input_float(
+                prefix + name,
+                self.value,
+            )[1]
+        else:
+            raise TypeError(f'Unsupported value type for {name}: {self.value_type}')
+
+        imgui.pop_id()
+
+        self.value = self.value_type(value)
+
+        return self.value
+
+    def _draw_checkbox_widget(self, name: str, hide_label: bool = False) -> ValueTypes:
+        prefix = '## ' if hide_label else ''
+
+        imgui.push_id(f'{name}_checkbox_{self.id}')
+
+        value: ValueTypes = None
+        if self.value_type is bool:
+            value = imgui.checkbox(
+                prefix + name,
+                self.value,
+            )[1]
+        else:
+            raise TypeError(f'Unsupported value type for {name}: {self.value_type}')
+
+        imgui.pop_id()
+
+        self.value = self.value_type(value)
+
+        return self.value
+
+    # ---------------------------------------------------------------------------------------------------
+    # Public function
+
+    def draw_param_widgets(self, name: str) -> ValueTypes:
+        """Draw interactive widgets to assign parameter values."""
+
+        if self.value_type in [float, int]:
+            # Draw slider input
+            imgui.text(f'{name} Slider')
+            imgui.same_line()
+            self._draw_slider_widget(name, hide_label=True)
+
+            # Draw direct input widget, too.
+            imgui.text(f'{name} Input')
+            self._draw_input_widget(name, hide_label=True)
+        elif self.value_type is bool:
+            imgui.text(name)
+            imgui.same_line()
+            self._draw_checkbox_widget(name, hide_label=True)
+        else:
+            raise TypeError(f'Unsupported value type for {name}: {self.value_type}')
+
+        return self.value

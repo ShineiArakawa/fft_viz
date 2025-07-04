@@ -236,10 +236,10 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
 
     KEYS                                  = [KEY_INPUT, KEY_MASKED, KEY_MASKED_INPUT]
 
-    MIN_IMG_SIZE      : int               = 4
+    MIN_IMG_SIZE      : int               = 5    # it has to larger than 4
     MAX_IMG_SIZE      : int               = 2048 # 256 is already heavy with padding even if using CUDA backend ...
 
-    PARAMS_CACHE_PATH : pathlib.Path      = pathlib.Path('.cache/params.json')
+    PARAMS_CACHE_PATH : pathlib.Path      = pathlib.Path('.cache/fft_vis_params.json')
 
     NUM_PARAMS_CACHES : int               = 9 # shuould be <10 due to the limit of number keys
     # autopep8: on
@@ -817,7 +817,7 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
                 window_name = WINDOW_FUNC_NAMES[self.params.window_func]
                 window_func = self.params.windowfn_instances[window_name]
                 for name, param in window_func.params.items():
-                    param.add_slider_and_input(name)
+                    param.draw_param_widgets(name)
 
                 imgui.separator()
                 if self.state.window is not None and implot.begin_plot(f'{window_name} Window', size=(-1, 256)):
