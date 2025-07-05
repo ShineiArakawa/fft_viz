@@ -1,4 +1,4 @@
-"""A interactive visualizer program for high-quality DCT analysis
+"""A interactive visualizer program for high-quality finite impulse response filter design
 """
 
 # autopep8: off
@@ -13,6 +13,7 @@ import json
 import math
 import pathlib
 import typing
+import uuid
 
 # NOTE: Make sure to import PyTorch before importing PyViewer-extended
 import torch
@@ -21,6 +22,7 @@ import nfdpy
 import numpy as np
 import pydantic
 import pyviewer_extended
+import pyviewer_extended.multi_textures_viewer as multi_textures_viewer
 import radpsd
 import radpsd.signal as _signal
 import radpsd.torch_util as _torch_util
@@ -65,8 +67,16 @@ else:
 logger.info(f'Using device: {_device}, dtype: {_dtype}')
 
 
+def unique(func, label, *args, **kwargs):
+    unique_id = label + '_' + uuid.uuid4().hex
+    imgui.push_id(unique_id)
+    ret = func(label, *args, **kwargs)
+    imgui.pop_id()
+    return ret
+
 # --------------------------------------------------------------------------------------------------------------------------------------------------------
 # Parameters
+
 
 class ImageMode(enum.IntEnum):
     # autopep8: off
@@ -122,6 +132,17 @@ class Params:
     input_psd_profile_ylim_max          : float        = 1e2                                                                    # maximum y-limit for the radial and axial power spectral density plot
     input_psd_profile_xscale_log        : bool         = False                                                                  # show x axis in log10 scale?
     input_psd_profile_yscale_log        : bool         = True                                                                   # show y axis in log10 scale?
+
+    filter_profile_ylim_fixed           : bool         = True                                                                   # fix the y-limits of the radial and axial power spectral density plot
+    filter_profile_ylim_min             : float        = -10.0                                                                  # minimum y-limit for the radial and axial power spectral density plot
+    filter_profile_ylim_max             : float        = 0.5                                                                    # maximum y-limit for the radial and axial power spectral density plot
+    filter_profile_xscale_log           : bool         = False                                                                  # show x axis in log10 scale?
+
+    filtered_psd_profile_ylim_fixed     : bool         = False                                                                  # fix the y-limits of the radial and axial power spectral density plot
+    filtered_psd_profile_ylim_min       : float        = 1e-12                                                                  # minimum y-limit for the radial and axial power spectral density plot
+    filtered_psd_profile_ylim_max       : float        = 1e2                                                                    # maximum y-limit for the radial and axial power spectral density plot
+    filtered_psd_profile_xscale_log     : bool         = False                                                                  # show x axis in log10 scale?
+    filtered_psd_profile_yscale_log     : bool         = True                                                                   # show y axis in log10 scale?
 
     filters                             : list         = pydantic.Field(default_factory=list)
     retain_power                        : bool         = False
@@ -249,6 +270,7 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
             name=name,
             texture_names=self.KEYS,
             enable_vsync=enable_vsync,
+            full_screen_mode=multi_textures_viewer.hello_imgui.FullScreenMode.full_monitor_work_area,
             with_font_awesome=True,
             with_implot=True
         )
@@ -268,6 +290,14 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         self.state.input_rad_psd = None
 
         self.state.filter_img = None
+        self.state.filter_profile_horizontal = None
+        self.state.filter_profile_vertical = None
+
+        self.state.filtered_axial_psd_h = None
+        self.state.filtered_axial_psd_v = None
+        self.state.filtered_psd_img = None
+        self.state.filtered_rad_psd = None
+
         self.state.output_img = None
 
         self.state.diff_img = None
@@ -460,7 +490,7 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         self.state.input_axial_psd_v = np.ascontiguousarray(np.fft.ifftshift(input_psd[:, :, half_w].cpu().numpy(), axes=1)[:, :half_h], dtype=np.float64)  # [C, H]
 
         # 2D psd plot
-        input_psd_img = input_psd.mean(dim=0)                       # take average on channel axis
+        input_psd_img = input_psd.mean(dim=0)                      # take average on channel axis
         input_psd_img = 10.0 * torch.log10(input_psd_img + 1e-10)  # to decibels
 
         # Sanity check
@@ -497,11 +527,34 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
             # Dummy
             filter_img = np.ones(shape=(spectrum.shape[-2], spectrum.shape[-1]), dtype=np.float64)
 
-        filter_img = 10.0 * np.log10(filter_img + 1e-10)  # to decibels
-
         # Sanity check
         assert filter_img.ndim == 2
-        self.state.filter_img = filter_img
+        self.state.filter_img = 20.0 * np.log10(filter_img + 1e-15)  # to decibels
+        self.state.filter_profile_horizontal = np.ascontiguousarray(np.fft.ifftshift(filter_img[half_h, :])[:half_w], dtype=np.float64)
+        self.state.filter_profile_vertical = np.ascontiguousarray(np.fft.ifftshift(filter_img[:, half_w])[:half_h], dtype=np.float64)
+
+        # Filterd psd
+        filtered_psd = spectrum.abs().square() / (img.shape[-2] * img.shape[-1])
+        self.state.filtered_axial_psd_h = np.ascontiguousarray(np.fft.ifftshift(filtered_psd[:, half_h, :].cpu().numpy(), axes=1)[:, :half_w], dtype=np.float64)  # [C, W]
+        self.state.filtered_axial_psd_v = np.ascontiguousarray(np.fft.ifftshift(filtered_psd[:, :, half_w].cpu().numpy(), axes=1)[:, :half_h], dtype=np.float64)  # [C, H]
+
+        # 2D psd plot
+        filtered_psd_img = filtered_psd.mean(dim=0)                      # take average on channel axis
+        filtered_psd_img = 10.0 * torch.log10(filtered_psd_img + 1e-10)  # to decibels
+
+        # Sanity check
+        assert filtered_psd_img.ndim == 2
+        self.state.filtered_psd_img = np.ascontiguousarray(filtered_psd_img.cpu().numpy()).astype(np.float32)
+
+        # Compute the radial power spectral density
+        filtered_rad_psd = _module.calc_radial_psd(
+            filtered_psd.permute(1, 2, 0).unsqueeze(0).contiguous(),  # [1, H, W, C]
+            _n_radial_divs,
+            _n_polar_divs,
+        )  # [1, n_divs, n_points, C]
+
+        filtered_rad_psd = filtered_rad_psd.mean(dim=(0, 1))  # [n_points, C]
+        self.state.filtered_rad_psd = filtered_rad_psd.cpu().numpy().astype(np.float64)
 
         # ---------------------------------------------------------------------------------------------------
         # Inverse FFT
@@ -695,23 +748,46 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
                 for name, param in current_filter.params.items():
                     param.draw_param_widgets(name)
 
+            self.params.retain_power = imgui.checkbox('Retain Gain', self.params.retain_power)[1]
+
         # ---------------------------------------------------------------------------------------------------
         # Visualization parameters
 
         imgui.separator()
-        if imgui.collapsing_header('Visualization', flags=imgui.TreeNodeFlags_.default_open):
+        if imgui.collapsing_header('Visualization'):
             imgui.separator_text('Color maps')
             self.params.img_cmap_id = imgui.combo('Image color map', self.params.img_cmap_id, MPL_CMAPS)[1]
             self.params.psd_cmap_id = imgui.combo('PSD color map', self.params.psd_cmap_id, MPL_CMAPS)[1]
             self.params.filter_cmap_id = imgui.combo('Filter color map', self.params.filter_cmap_id, MPL_CMAPS)[1]
 
-            imgui.separator_text('Power Spectral Density Profile')
-            self.params.input_psd_profile_ylim_fixed = imgui.checkbox('Fix y-limits', self.params.input_psd_profile_ylim_fixed)[1]
+            imgui.separator_text('Power Spectral Density Profile of Input Image')
+            # autopep8: off
+            imgui.push_id('Power Spectral Density Profile of Input Image (Fix y-limits)'); self.params.input_psd_profile_ylim_fixed = imgui.checkbox('Fix y-limits', self.params.input_psd_profile_ylim_fixed)[1]; imgui.pop_id()
             if self.params.input_psd_profile_ylim_fixed:
-                self.params.input_psd_profile_ylim_min = imgui.input_float('Min y-limit', self.params.input_psd_profile_ylim_min, step=1e-10, format='%.2e')[1]
-                self.params.input_psd_profile_ylim_max = imgui.input_float('Max y-limit', self.params.input_psd_profile_ylim_max, step=1e-10, format='%.2e')[1]
-            self.params.input_psd_profile_xscale_log = imgui.checkbox('X in log scale', self.params.input_psd_profile_xscale_log)[1]
-            self.params.input_psd_profile_yscale_log = imgui.checkbox('Y in log scale', self.params.input_psd_profile_yscale_log)[1]
+                imgui.push_id('Power Spectral Density Profile of Input Image  (Min y-limit)'); self.params.input_psd_profile_ylim_min = imgui.input_float('Min y-limit', self.params.input_psd_profile_ylim_min, step=1e-10, format='%.2e')[1]; imgui.pop_id()
+                imgui.push_id('Power Spectral Density Profile of Input Image  (Max y-limit)'); self.params.input_psd_profile_ylim_max = imgui.input_float('Max y-limit', self.params.input_psd_profile_ylim_max, step=1e-10, format='%.2e')[1]; imgui.pop_id()
+            imgui.push_id('Power Spectral Density Profile of Input Image  (X in log scale)'); self.params.input_psd_profile_xscale_log = imgui.checkbox('X in log scale', self.params.input_psd_profile_xscale_log)[1]; imgui.pop_id()
+            imgui.push_id('Power Spectral Density Profile of Input Image  (Y in log scale)'); self.params.input_psd_profile_yscale_log = imgui.checkbox('Y in log scale', self.params.input_psd_profile_yscale_log)[1]; imgui.pop_id()
+            # autopep8: on
+
+            imgui.separator_text('Filter Profile')
+            # autopep8: off
+            imgui.push_id('Filter Profile (Fix y-limits)'); self.params.filter_profile_ylim_fixed = imgui.checkbox('Fix y-limits', self.params.filter_profile_ylim_fixed)[1]; imgui.pop_id()
+            if self.params.filter_profile_ylim_fixed:
+                imgui.push_id('Filter Profile (Min y-limit)'); self.params.filter_profile_ylim_min = imgui.input_float('Min y-limit', self.params.filter_profile_ylim_min, step=1e-10, format='%.2e')[1]; imgui.pop_id()
+                imgui.push_id('Filter Profile (Max y-limit)'); self.params.filter_profile_ylim_max = imgui.input_float('Max y-limit', self.params.filter_profile_ylim_max, step=1e-10, format='%.2e')[1]; imgui.pop_id()
+            imgui.push_id('Filter Profile (X in log scale)'); self.params.filter_profile_xscale_log = imgui.checkbox('X in log scale', self.params.filter_profile_xscale_log)[1]; imgui.pop_id()
+            # autopep8: on
+
+            imgui.separator_text('Power Spectral Density Profile of Filtered Image')
+            # autopep8: off
+            imgui.push_id('Power Spectral Density Profile of Filtered Image (Fix y-limits)'); self.params.filtered_psd_profile_ylim_fixed = imgui.checkbox('Fix y-limits', self.params.filtered_psd_profile_ylim_fixed)[1]; imgui.pop_id()
+            if self.params.filtered_psd_profile_ylim_fixed:
+                imgui.push_id('Power Spectral Density Profile of Filtered Image (Min y-limit)'); self.params.filtered_psd_profile_ylim_min = imgui.input_float('Min y-limit', self.params.filtered_psd_profile_ylim_min, step=1e-10, format='%.2e')[1]; imgui.pop_id()
+                imgui.push_id('Power Spectral Density Profile of Filtered Image (Max y-limit)'); self.params.filtered_psd_profile_ylim_max = imgui.input_float('Max y-limit', self.params.filtered_psd_profile_ylim_max, step=1e-10, format='%.2e')[1]; imgui.pop_id()
+            imgui.push_id('Power Spectral Density Profile of Filtered Image (X in log scale)'); self.params.filtered_psd_profile_xscale_log = imgui.checkbox('X in log scale', self.params.filtered_psd_profile_xscale_log)[1]; imgui.pop_id()
+            imgui.push_id('Power Spectral Density Profile of Filtered Image (Y in log scale)'); self.params.filtered_psd_profile_yscale_log = imgui.checkbox('Y in log scale', self.params.filtered_psd_profile_yscale_log)[1]; imgui.pop_id()
+            # autopep8: on
 
         # ---------------------------------------------------------------------------------------------------
         # Note
@@ -769,13 +845,12 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
                 size=(plot_width, -1),
                 flags=implot.Flags_.no_legend.value | implot.Flags_.equal.value
             ):
-
                 half_size = self.params.img_size // 2
 
-                implot.setup_axes("Frequency [wave number]", "Frequency [wave number]")
+                implot.setup_axes("Horizontal Frequency [wave number]", "Vertical Frequency [wave number]")
                 implot.setup_axes_limits(-half_size, half_size, -half_size, half_size)
                 implot.plot_heatmap(
-                    label_id='##Heatmap Power Spectral Density',
+                    label_id='##Heatmap Power Spectral Density of Input Image',
                     values=psd_img,
                     scale_min=scale_min,
                     scale_max=scale_max,
@@ -791,6 +866,100 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
 
         if cmap is not None:
             implot.pop_colormap()
+
+    @pyviewer_extended.dockable
+    def input_psd_profile_plot(self):
+        if imgui.begin_tab_bar('Power Spectral Density Profiles of Input Image'):
+            # ----------------------------------------------------------------------------------------------------------------------------------------------------
+            # Plot the radial power spectral density
+
+            if imgui.begin_tab_item_simple('Radial'):
+                if self.state.input_rad_psd is not None and implot.begin_plot(
+                    'Radial Power Spectral Density of Input Image',
+                    size=(-1, -1),
+                    flags=implot.Flags_.no_legend.value if self.state.input_rad_psd.shape[1] == 1 else 0
+                ):
+                    rad_psd: np.ndarray = self.state.input_rad_psd
+                    is_db_scale = self.params.input_psd_profile_yscale_log
+                    if is_db_scale:
+                        rad_psd = rad_psd.copy() ** 10
+
+                    # Setup x axis
+                    implot.setup_axis(implot.ImAxis_.x1, "Frequency [wave number]")
+                    implot.setup_axis_limits(implot.ImAxis_.x1, 1.0, self.params.img_size / 2, imgui.Cond_.always.value)
+
+                    # Setup y axis
+                    implot.setup_axis(implot.ImAxis_.y1, "Power Spectral Density" + (' [db]' if is_db_scale else ''), flags=implot.AxisFlags_.auto_fit.value)
+                    if self.params.input_psd_profile_ylim_fixed:
+                        implot.setup_axis_limits(implot.ImAxis_.y1, self.params.input_psd_profile_ylim_min, self.params.input_psd_profile_ylim_max, imgui.Cond_.always.value)
+
+                    # Set log-log scale
+                    implot.setup_axis_scale(implot.ImAxis_.x1, implot.Scale_.log10.value if self.params.input_psd_profile_xscale_log else implot.Scale_.linear.value)
+                    implot.setup_axis_scale(implot.ImAxis_.y1, implot.Scale_.log10.value if is_db_scale else implot.Scale_.linear.value)
+
+                    freq = radpsd.radial_freq(img_size=self.params.img_size, n_radial_bins=len(rad_psd), dtype=np.float64)  # [cycles/pix]
+                    freq = freq * self.params.img_size  # ranged in [0, ..., img_size / 2]
+                    freq = np.ascontiguousarray(freq[1:])  # w/o DC
+
+                    if rad_psd.shape[1] == 3:
+                        # RGB
+                        implot.set_next_line_style(imgui.ImVec4(1.0, 0.0, 0.0, 1.0))
+                        unique(implot.plot_line, 'Radial PSD - Red', freq, np.ascontiguousarray(rad_psd[1:, 0]))
+                        implot.set_next_line_style(imgui.ImVec4(0.0, 1.0, 0.0, 1.0))
+                        unique(implot.plot_line, 'Radial PSD - Green', freq, np.ascontiguousarray(rad_psd[1:, 1]))
+                        implot.set_next_line_style(imgui.ImVec4(0.0, 0.0, 1.0, 1.0))
+                        unique(implot.plot_line, 'Radial PSD - Blue', freq, np.ascontiguousarray(rad_psd[1:, 2]))
+                    else:
+                        unique(implot.plot_line, 'Radial Power Spectral Density', freq, np.ascontiguousarray(rad_psd[1:, 0]))
+
+                    implot.end_plot()
+                imgui.end_tab_item()
+
+            # ----------------------------------------------------------------------------------------------------------------------------------------------------
+            # Plot the axial power spectral density
+
+            for label, axial_psd in (('Horizontal', self.state.input_axial_psd_h), ('Vertical', self.state.input_axial_psd_v)):
+                if imgui.begin_tab_item_simple(label):
+                    # Plot the axial power spectral density
+                    if axial_psd is not None and self.state.input_psd_img is not None and implot.begin_plot(
+                        f'{label} Power Spectral Density of Input Image',
+                        size=(-1, -1),
+                        flags=implot.Flags_.no_legend.value if axial_psd.shape[0] == 1 else 0
+                    ):
+                        is_db_scale = self.params.input_psd_profile_yscale_log
+                        if is_db_scale:
+                            axial_psd = axial_psd.copy() ** 10
+
+                        padded_img_size = self.state.input_psd_img.shape[-1]
+                        freq = np.fft.fftfreq(padded_img_size, d=1.0/self.params.img_size)[1:axial_psd.shape[1]].astype(np.float64)  # assume that the img is square
+
+                        # Setup x axis
+                        implot.setup_axis(implot.ImAxis_.x1, "Frequency [wave number]")
+                        implot.setup_axis_limits(implot.ImAxis_.x1, freq.min(), freq.max(), imgui.Cond_.always.value)
+
+                        # Setup y axis
+                        implot.setup_axis(implot.ImAxis_.y1, "Power Spectral Density" + (' [dB]' if is_db_scale else ''), flags=implot.AxisFlags_.auto_fit.value)
+                        if self.params.input_psd_profile_ylim_fixed:
+                            implot.setup_axis_limits(implot.ImAxis_.y1, self.params.input_psd_profile_ylim_min, self.params.input_psd_profile_ylim_max, imgui.Cond_.always.value)
+
+                        # Set log-log scale
+                        implot.setup_axis_scale(implot.ImAxis_.x1, implot.Scale_.log10.value if self.params.input_psd_profile_xscale_log else implot.Scale_.linear.value)
+                        implot.setup_axis_scale(implot.ImAxis_.y1, implot.Scale_.log10.value if is_db_scale else implot.Scale_.linear.value)
+
+                        if axial_psd.shape[0] == 3:
+                            # RGB
+                            implot.set_next_line_style(imgui.ImVec4(1.0, 0.0, 0.0, 1.0))
+                            unique(implot.plot_line, f'{label} PSD - Red', freq, np.ascontiguousarray(axial_psd[0, 1:]))
+                            implot.set_next_line_style(imgui.ImVec4(0.0, 1.0, 0.0, 1.0))
+                            unique(implot.plot_line, f'{label} PSD - Green', freq, np.ascontiguousarray(axial_psd[1, 1:]))
+                            implot.set_next_line_style(imgui.ImVec4(0.0, 0.0, 1.0, 1.0))
+                            unique(implot.plot_line, f'{label} PSD - Blue', freq, np.ascontiguousarray(axial_psd[2, 1:]))
+                        else:
+                            unique(implot.plot_line, 'Horizontal Power Spectral Density', freq, np.ascontiguousarray(axial_psd[0, 1:]))
+
+                        implot.end_plot()
+                    imgui.end_tab_item()
+            imgui.end_tab_bar()
 
     @pyviewer_extended.dockable
     def filter_plot(self) -> None:
@@ -812,17 +981,18 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
             scale_max = np.max(filter_img)
 
             if implot.begin_plot(
-                'Heatmap of the Filter',
+                'Filter',
                 size=(plot_width, -1),
                 flags=implot.Flags_.no_legend.value | implot.Flags_.equal.value
             ):
 
                 half_size = self.params.img_size // 2
 
-                implot.setup_axes("Frequency [wave number]", "Frequency [wave number]")
+                implot.setup_axes("Horizontal Frequency [wave number]", "Vertical Frequency [wave number]")
                 implot.setup_axes_limits(-half_size, half_size, -half_size, half_size)
-                implot.plot_heatmap(
-                    label_id='##Heatmap Filter',
+                unique(
+                    implot.plot_heatmap,
+                    '##Heatmap Filter',
                     values=filter_img,
                     scale_min=scale_min,
                     scale_max=scale_max,
@@ -834,37 +1004,120 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
                 implot.end_plot()
 
             imgui.same_line()
-            implot.colormap_scale("Filter gain [dB]", scale_min, scale_max, size=(color_bar_width, -1))
+            unique(implot.colormap_scale, "Filter gain [dB]", scale_min, scale_max, size=(color_bar_width, -1))
 
         if cmap is not None:
             implot.pop_colormap()
 
     @pyviewer_extended.dockable
-    def psd_profile_plot(self):
-        if imgui.begin_tab_bar('Power Spectral Density Profiles of Input Image'):
+    def filter_profile_plot(self):
+        if imgui.begin_tab_bar('Filter Profiles'):
+            for label, filter_profile in (('Horizontal', self.state.filter_profile_horizontal), ('Vertical', self.state.filter_profile_vertical)):
+                if imgui.begin_tab_item_simple(label):
+                    # Plot the axial power spectral density
+                    if filter_profile is not None and self.state.input_psd_img is not None and implot.begin_plot(
+                        f'{label} Power Spectral Density of Filter',
+                        size=(-1, -1),
+                        flags=implot.Flags_.no_legend.value if filter_profile.shape[0] == 1 else 0
+                    ):
+                        filter_profile = np.log10(filter_profile.copy() ** 20 + 1e-15)  # NOTE: dB for not power but amplitude: 20 * log10(psd)
+
+                        padded_img_size = self.state.input_psd_img.shape[-1]
+                        freq = np.fft.fftfreq(padded_img_size, d=1.0/self.params.img_size)[1:len(filter_profile)].astype(np.float64)  # assume that the img is square
+
+                        # Setup x axis
+                        implot.setup_axis(implot.ImAxis_.x1, "Frequency [wave number]")
+                        implot.setup_axis_limits(implot.ImAxis_.x1, freq.min(), freq.max(), imgui.Cond_.always.value)
+                        if self.params.filter_profile_ylim_fixed:
+                            implot.setup_axis_limits(implot.ImAxis_.y1, self.params.filter_profile_ylim_min, self.params.filter_profile_ylim_max, imgui.Cond_.always.value)
+
+                        # Setup y axis
+                        implot.setup_axis(implot.ImAxis_.y1, "Gain [dB]", flags=implot.AxisFlags_.auto_fit.value)
+
+                        # Set log-log scale
+                        implot.setup_axis_scale(implot.ImAxis_.x1, implot.Scale_.log10.value if self.params.filter_profile_xscale_log else implot.Scale_.linear.value)
+                        implot.setup_axis_scale(implot.ImAxis_.y1, implot.Scale_.linear.value)
+
+                        unique(implot.plot_line, 'Horizontal Power Spectral Density', freq, np.ascontiguousarray(filter_profile[1:]))
+
+                        implot.end_plot()
+                    imgui.end_tab_item()
+            imgui.end_tab_bar()
+
+    @pyviewer_extended.dockable
+    def filtered_psd_plot(self) -> None:
+        x_avail, _ = imgui.get_content_region_avail()
+        color_bar_prop = 0.10  # 10% for the color bar
+        plot_width = x_avail * (1.0 - color_bar_prop)
+        color_bar_width = x_avail - plot_width
+
+        cmap = getattr(implot.Colormap_, self.psd_cmap, None)
+        if cmap is not None:
+            implot.push_colormap(cmap.value)
+
+        if self.state.filtered_psd_img is not None:
+            psd_img = self.state.filtered_psd_img
+            scale_min = np.min(psd_img)
+            scale_max = np.max(psd_img)
+
+            if implot.begin_plot(
+                'Power Spectral Density of Filtered Image',
+                size=(plot_width, -1),
+                flags=implot.Flags_.no_legend.value | implot.Flags_.equal.value
+            ):
+
+                half_size = self.params.img_size // 2
+
+                implot.setup_axes("Horizontal Frequency [wave number]", "Vertical Frequency [wave number]")
+                implot.setup_axes_limits(-half_size, half_size, -half_size, half_size)
+                unique(
+                    implot.plot_heatmap,
+                    '##Heatmap Power Spectral Density of Filtered Image',
+                    values=psd_img,
+                    scale_min=scale_min,
+                    scale_max=scale_max,
+                    bounds_min=implot.Point(-half_size, -half_size),
+                    bounds_max=implot.Point(half_size, half_size),
+                    label_fmt='',
+                )
+
+                implot.end_plot()
+
+            imgui.same_line()
+            unique(implot.colormap_scale, "Power Spectral Density [dB]", scale_min, scale_max, size=(color_bar_width, -1))
+
+        if cmap is not None:
+            implot.pop_colormap()
+
+    @pyviewer_extended.dockable
+    def filtered_psd_profile_plot(self):
+        if imgui.begin_tab_bar('Power Spectral Density Profiles of Filtered Image'):
             # ----------------------------------------------------------------------------------------------------------------------------------------------------
             # Plot the radial power spectral density
 
             if imgui.begin_tab_item_simple('Radial'):
-                if self.state.input_rad_psd is not None and implot.begin_plot(
-                    'Radial Power Spectral Density',
+                if self.state.filtered_rad_psd is not None and implot.begin_plot(
+                    'Radial Power Spectral Density of Filtered Image',
                     size=(-1, -1),
-                    flags=implot.Flags_.no_legend.value if self.state.input_rad_psd.shape[1] == 1 else 0
+                    flags=implot.Flags_.no_legend.value if self.state.filtered_rad_psd.shape[1] == 1 else 0
                 ):
-                    rad_psd: np.ndarray = self.state.input_rad_psd
+                    rad_psd: np.ndarray = self.state.filtered_rad_psd
+                    is_db_scale = self.params.filtered_psd_profile_yscale_log
+                    if is_db_scale:
+                        rad_psd = rad_psd.copy() ** 10
 
                     # Setup x axis
                     implot.setup_axis(implot.ImAxis_.x1, "Frequency [wave number]")
                     implot.setup_axis_limits(implot.ImAxis_.x1, 1.0, self.params.img_size / 2, imgui.Cond_.always.value)
 
                     # Setup y axis
-                    implot.setup_axis(implot.ImAxis_.y1, "Power Spectral Density [dB]", flags=implot.AxisFlags_.auto_fit.value)
-                    if self.params.input_psd_profile_ylim_fixed:
-                        implot.setup_axis_limits(implot.ImAxis_.y1, self.params.input_psd_profile_ylim_min, self.params.input_psd_profile_ylim_max, imgui.Cond_.always.value)
+                    implot.setup_axis(implot.ImAxis_.y1, "Power Spectral Density" + (" [dB]"if is_db_scale else ""), flags=implot.AxisFlags_.auto_fit.value)
+                    if self.params.filtered_psd_profile_ylim_fixed:
+                        implot.setup_axis_limits(implot.ImAxis_.y1, self.params.filtered_psd_profile_ylim_min, self.params.filtered_psd_profile_ylim_max, imgui.Cond_.always.value)
 
                     # Set log-log scale
-                    implot.setup_axis_scale(implot.ImAxis_.x1, implot.Scale_.log10.value if self.params.input_psd_profile_xscale_log else implot.Scale_.linear.value)
-                    implot.setup_axis_scale(implot.ImAxis_.y1, implot.Scale_.log10.value if self.params.input_psd_profile_yscale_log else implot.Scale_.linear.value)
+                    implot.setup_axis_scale(implot.ImAxis_.x1, implot.Scale_.log10.value if self.params.filtered_psd_profile_xscale_log else implot.Scale_.linear.value)
+                    implot.setup_axis_scale(implot.ImAxis_.y1, implot.Scale_.log10.value if is_db_scale else implot.Scale_.linear.value)
 
                     freq = radpsd.radial_freq(img_size=self.params.img_size, n_radial_bins=len(rad_psd), dtype=np.float64)  # [cycles/pix]
                     freq = freq * self.params.img_size  # ranged in [0, ..., img_size / 2]
@@ -873,13 +1126,13 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
                     if rad_psd.shape[1] == 3:
                         # RGB
                         implot.set_next_line_style(imgui.ImVec4(1.0, 0.0, 0.0, 1.0))
-                        implot.plot_line('Radial PSD - Red', freq, np.ascontiguousarray(rad_psd[1:, 0]))
+                        unique(implot.plot_line, 'Radial PSD - Red', freq, np.ascontiguousarray(rad_psd[1:, 0]))
                         implot.set_next_line_style(imgui.ImVec4(0.0, 1.0, 0.0, 1.0))
-                        implot.plot_line('Radial PSD - Green', freq, np.ascontiguousarray(rad_psd[1:, 1]))
+                        unique(implot.plot_line, 'Radial PSD - Green', freq, np.ascontiguousarray(rad_psd[1:, 1]))
                         implot.set_next_line_style(imgui.ImVec4(0.0, 0.0, 1.0, 1.0))
-                        implot.plot_line('Radial PSD - Blue', freq, np.ascontiguousarray(rad_psd[1:, 2]))
+                        unique(implot.plot_line, 'Radial PSD - Blue', freq, np.ascontiguousarray(rad_psd[1:, 2]))
                     else:
-                        implot.plot_line('Radial Power Spectral Density', freq, np.ascontiguousarray(rad_psd[1:, 0]))
+                        unique(implot.plot_line, 'Radial Power Spectral Density', freq, np.ascontiguousarray(rad_psd[1:, 0]))
 
                     implot.end_plot()
                 imgui.end_tab_item()
@@ -887,14 +1140,18 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
             # ----------------------------------------------------------------------------------------------------------------------------------------------------
             # Plot the axial power spectral density
 
-            for label, axial_psd in (('Horizontal', self.state.input_axial_psd_h), ('Vertical', self.state.input_axial_psd_v)):
+            for label, axial_psd in (('Horizontal', self.state.filtered_axial_psd_h), ('Vertical', self.state.filtered_axial_psd_v)):
                 if imgui.begin_tab_item_simple(label):
                     # Plot the axial power spectral density
                     if axial_psd is not None and self.state.input_psd_img is not None and implot.begin_plot(
-                        f'{label} Power Spectral Density',
+                        f'{label} Power Spectral Density of Filtered Image',
                         size=(-1, -1),
                         flags=implot.Flags_.no_legend.value if axial_psd.shape[0] == 1 else 0
                     ):
+                        is_db_scale = self.params.filtered_psd_profile_yscale_log
+                        if is_db_scale:
+                            axial_psd = axial_psd.copy() ** 10
+
                         padded_img_size = self.state.input_psd_img.shape[-1]
                         freq = np.fft.fftfreq(padded_img_size, d=1.0/self.params.img_size)[1:axial_psd.shape[1]].astype(np.float64)  # assume that the img is square
 
@@ -903,28 +1160,80 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
                         implot.setup_axis_limits(implot.ImAxis_.x1, freq.min(), freq.max(), imgui.Cond_.always.value)
 
                         # Setup y axis
-                        implot.setup_axis(implot.ImAxis_.y1, "Power Spectral Density [dB]", flags=implot.AxisFlags_.auto_fit.value)
-                        if self.params.input_psd_profile_ylim_fixed:
-                            implot.setup_axis_limits(implot.ImAxis_.y1, self.params.input_psd_profile_ylim_min, self.params.input_psd_profile_ylim_max, imgui.Cond_.always.value)
+                        implot.setup_axis(implot.ImAxis_.y1, "Power Spectral Density" + (" [dB]"if is_db_scale else ""), flags=implot.AxisFlags_.auto_fit.value)
+                        if self.params.filtered_psd_profile_ylim_fixed:
+                            implot.setup_axis_limits(implot.ImAxis_.y1, self.params.filtered_psd_profile_ylim_min, self.params.filtered_sd_profile_ylim_max, imgui.Cond_.always.value)
 
                         # Set log-log scale
-                        implot.setup_axis_scale(implot.ImAxis_.x1, implot.Scale_.log10.value if self.params.input_psd_profile_xscale_log else implot.Scale_.linear.value)
-                        implot.setup_axis_scale(implot.ImAxis_.y1, implot.Scale_.log10.value if self.params.input_psd_profile_yscale_log else implot.Scale_.linear.value)
+                        implot.setup_axis_scale(implot.ImAxis_.x1, implot.Scale_.log10.value if self.params.filtered_psd_profile_xscale_log else implot.Scale_.linear.value)
+                        implot.setup_axis_scale(implot.ImAxis_.y1, implot.Scale_.log10.value if is_db_scale else implot.Scale_.linear.value)
 
                         if axial_psd.shape[0] == 3:
                             # RGB
                             implot.set_next_line_style(imgui.ImVec4(1.0, 0.0, 0.0, 1.0))
-                            implot.plot_line(f'{label} PSD - Red', freq, np.ascontiguousarray(axial_psd[0, 1:]))
+                            unique(implot.plot_line, f'{label} PSD - Red', freq, np.ascontiguousarray(axial_psd[0, 1:]))
                             implot.set_next_line_style(imgui.ImVec4(0.0, 1.0, 0.0, 1.0))
-                            implot.plot_line(f'{label} PSD - Green', freq, np.ascontiguousarray(axial_psd[1, 1:]))
+                            unique(implot.plot_line, f'{label} PSD - Green', freq, np.ascontiguousarray(axial_psd[1, 1:]))
                             implot.set_next_line_style(imgui.ImVec4(0.0, 0.0, 1.0, 1.0))
-                            implot.plot_line(f'{label} PSD - Blue', freq, np.ascontiguousarray(axial_psd[2, 1:]))
+                            unique(implot.plot_line, f'{label} PSD - Blue', freq, np.ascontiguousarray(axial_psd[2, 1:]))
                         else:
-                            implot.plot_line('Horizontal Power Spectral Density', freq, np.ascontiguousarray(axial_psd[0, 1:]))
+                            unique(implot.plot_line, 'Horizontal Power Spectral Density', freq, np.ascontiguousarray(axial_psd[0, 1:]))
 
                         implot.end_plot()
                     imgui.end_tab_item()
             imgui.end_tab_bar()
+
+    @typing_extensions.override
+    def setup_docking_layout(self, layout_funcs):
+        # Graceful initial layout ----------------------------------------------------------------------------------------------------------------
+        # Window layout
+        #   + ---------------------------- + ---------------------------- + ---------------------------- + ---------------------------- +
+        #   | 'Input'                      | 'Difference'                 | 'Output'                     |                              |
+        #   + ---------------------------- + ---------------------------- + ---------------------------- +                              |
+        #   | 'input_psd_plot'             | 'filter_plot'                | 'filtered_psd_plot'          | 'toolbar'                    |
+        #   + ---------------------------- + ---------------------------- + ---------------------------- +                              |
+        #   | 'input_psd_profile_plot'     | 'filter_profile_plot'        | 'filtered_psd_profile_plot'  |                              |
+        #   + ---------------------------- + ---------------------------- + ---------------------------- + ---------------------------- +
+        #
+        # Dockspace names
+        #   + ---------------------------- + ---------------------------- + ---------------------------- + ---------------------------- +
+        #   | 'MainDockSpace'              | 'Dock01'                     | 'Dock02'                     |                              |
+        #   + ---------------------------- + ---------------------------- + ---------------------------- +                              |
+        #   | 'Dock10'                     | 'Dock11'                     | 'Dock12'                     | 'Dock03'                     |
+        #   + ---------------------------- + ---------------------------- + ---------------------------- +                              |
+        #   | 'Dock20'                     | 'Dock21'                     | 'Dock22'                     |                              |
+        #   + ---------------------------- + ---------------------------- + ---------------------------- + ---------------------------- +
+
+        splits = [
+            # autopep8: off
+            # Split colomns first
+            multi_textures_viewer.hello_imgui.DockingSplit('MainDockSpace', 'Dock01', imgui.Dir.right, ratio_=3/4),
+            multi_textures_viewer.hello_imgui.DockingSplit(       'Dock01', 'Dock02', imgui.Dir.right, ratio_=2/3),
+            multi_textures_viewer.hello_imgui.DockingSplit(       'Dock02', 'Dock03', imgui.Dir.right, ratio_=1/2),
+
+            # Next, along row
+            multi_textures_viewer.hello_imgui.DockingSplit('MainDockSpace', 'Dock10',  imgui.Dir.down, ratio_=2/3),
+            multi_textures_viewer.hello_imgui.DockingSplit(       'Dock10', 'Dock20',  imgui.Dir.down, ratio_=1/2),
+
+            multi_textures_viewer.hello_imgui.DockingSplit(       'Dock01', 'Dock11',  imgui.Dir.down, ratio_=2/3),
+            multi_textures_viewer.hello_imgui.DockingSplit(       'Dock11', 'Dock21',  imgui.Dir.down, ratio_=1/2),
+
+            multi_textures_viewer.hello_imgui.DockingSplit(       'Dock02', 'Dock12',  imgui.Dir.down, ratio_=2/3),
+            multi_textures_viewer.hello_imgui.DockingSplit(       'Dock12', 'Dock22',  imgui.Dir.down, ratio_=1/2),
+            # autopep8: on
+        ]
+
+        title_to_dockspace_name = {
+            # autopep8: off
+                              'Input' : 'MainDockSpace',          'Difference': 'Dock01',                    'Output': 'Dock02',
+                     'input_psd_plot' :        'Dock10',         'filter_plot': 'Dock11',         'filtered_psd_plot': 'Dock12', 'toolbar': 'Dock03',
+             'input_psd_profile_plot' :        'Dock20', 'filter_profile_plot': 'Dock21', 'filtered_psd_profile_plot': 'Dock22',
+            # autopep8: on
+        }
+
+        windows = [multi_textures_viewer.hello_imgui.DockableWindow(f._title, title_to_dockspace_name[f._title], f, can_be_closed_=True) for f in layout_funcs]
+
+        return splits, windows
 
 
 # -------------------------------------------------------------------------------------------------------------------------------------------------

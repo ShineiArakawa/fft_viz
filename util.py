@@ -225,6 +225,7 @@ class ValueEntity:
 
             # Draw direct input widget, too.
             imgui.text(f'{name} Input')
+            imgui.same_line()
             self._draw_input_widget(name, hide_label=True)
         elif self.value_type is bool:
             imgui.text(name)

@@ -1,6 +1,6 @@
 [project]
 name = "fft-viz"
-version = "1.0.1"
+version = "1.1.0"
 description = "A high-quality FFT visualization tool"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -19,5 +19,5 @@ dependencies = [
 
 [tool.uv.sources]
 nfdpy = { git = "https://github.com/ShineiArakawa/nfdpy.git", tag = "v0.2.0" }
-pyviewer-extended = { git = "https://github.com/ShineiArakawa/pyviewer-extended.git", tag = "v0.6.0" }
+pyviewer-extended = { git = "https://github.com/ShineiArakawa/pyviewer-extended.git", tag = "v0.8.0" }
 radpsd = { git = "https://github.com/ShineiArakawa/radpsd.git", tag = "v1.1.2" }

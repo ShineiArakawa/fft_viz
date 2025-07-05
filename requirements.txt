@@ -8,7 +8,7 @@ numpy==2.3.0
     # via fft-viz (pyproject.toml)
 pydantic==2.11.7
     # via fft-viz (pyproject.toml)
-pyviewer-extended @ git+https://github.com/ShineiArakawa/pyviewer-extended.git@e023ac102d14c1a097165715051caa7bc4e79efd
+pyviewer-extended @ git+https://github.com/ShineiArakawa/pyviewer-extended.git@5ac751501d9f86488c27eccd4018ef30d9f4628f
     # via fft-viz (pyproject.toml)
 radpsd @ git+https://github.com/ShineiArakawa/radpsd.git@aff52db4b50487b911845e997396d039e2494160
     # via fft-viz (pyproject.toml)

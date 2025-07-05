@@ -27,7 +27,7 @@ import radpsd.torch_util as _torch_util
 import torchvision.io as io
 import torchvision.transforms.v2.functional as F
 import typing_extensions
-from imgui_bundle import imgui, implot
+from imgui_bundle import imgui, implot, hello_imgui
 
 import util
 import windowing
@@ -259,6 +259,7 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
             name=name,
             texture_names=self.KEYS,
             enable_vsync=enable_vsync,
+            full_screen_mode=hello_imgui.FullScreenMode.full_monitor_work_area,
             with_font_awesome=True,
             with_implot=True
         )
@@ -883,6 +884,47 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         # ---------------------------------------------------------------------------------------------------
         # Cache param
         self.cached_params[self.cur_cache_param_id] = self.params
+
+    @typing_extensions.override
+    def setup_docking_layout(self, layout_funcs):
+        # Graceful initial layout ----------------------------------------------------------------------------------------------------------------
+        # Window layout
+        #   + ---------------------------- + ---------------------------- + ---------------------------- + ---------------------------- +
+        #   | 'psd_plot'                   | 'Input'                                                     |                              |
+        #   + ---------------------------- + ---------------------------- + ---------------------------- + 'toolbar'                    |
+        #   | 'psd_profile_plot'           | 'Masked'                     | 'Masked Input'               |                              |
+        #   + ---------------------------- + ---------------------------- + ---------------------------- + ---------------------------- |
+        #
+        # Dockspace names
+        #   + ---------------------------- + ---------------------------- + ---------------------------- + ---------------------------- +
+        #   | 'MainDockSpace'              | 'Dock0'                                                     |                              |
+        #   + ---------------------------- + ---------------------------- + ---------------------------- + 'Dock1'                      |
+        #   | 'Dock2'                      | 'Dock3'                      | 'Dock4'                      |                              |
+        #   + ---------------------------- + ---------------------------- + ---------------------------- + ---------------------------- |
+
+        splits = [
+            # autopep8: off
+            # Split colomns first
+            hello_imgui.DockingSplit('MainDockSpace', 'Dock0', imgui.Dir.right, ratio_=3/4),
+            hello_imgui.DockingSplit(        'Dock0', 'Dock1', imgui.Dir.right, ratio_=1/3),
+
+            hello_imgui.DockingSplit('MainDockSpace', 'Dock2',  imgui.Dir.down, ratio_=1/2),
+
+            hello_imgui.DockingSplit(        'Dock0', 'Dock3',  imgui.Dir.down, ratio_=1/2),
+            hello_imgui.DockingSplit(        'Dock3', 'Dock4', imgui.Dir.right, ratio_=1/2),
+            # autopep8: on
+        ]
+
+        title_to_dockspace_name = {
+            # autopep8: off
+                           'psd_plot' : 'MainDockSpace',          'Input' : 'Dock0',      'toolbar' : 'Dock1',
+                   'psd_profile_plot' :         'Dock2',         'Masked' : 'Dock3', 'Masked Input' : 'Dock4',
+            # autopep8: on
+        }
+
+        windows = [hello_imgui.DockableWindow(f._title, title_to_dockspace_name[f._title], f, can_be_closed_=True) for f in layout_funcs]
+
+        return splits, windows
 
 
 # -------------------------------------------------------------------------------------------------------------------------------------------------

@@ -1,6 +1,7 @@
 # fft-viz
 
-![teaser](/assets/teaser.png)
+![teaser_fft_vis](/assets/teaser_fft_vis.png)
+![teaser_fir_vis](/assets/teaser_fir_vis.png)
 
 A high-quality FFT visualization tool
 

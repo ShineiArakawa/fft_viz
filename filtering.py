@@ -42,7 +42,7 @@ class FilterBase(metaclass=abc.ABCMeta):
 # Filters
 
 
-class AllPassFilter(FilterBase):
+class AllPassFilter(FilterBase):  # no-op
     def compute_filter(self, size: int, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
         filter = torch.ones((size, size), dtype=dtype, device=device)  # [size, size]
         return filter
