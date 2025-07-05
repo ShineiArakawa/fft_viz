@@ -29,8 +29,8 @@ import torchvision.transforms.v2.functional as F
 import typing_extensions
 from imgui_bundle import imgui, implot, hello_imgui
 
-import util
-import windowing
+import lib.util as util
+import lib.windowing as windowing
 # autopep8: on
 
 logger = util.get_logger()
@@ -239,7 +239,7 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
     MIN_IMG_SIZE      : int               = 5    # it has to larger than 4
     MAX_IMG_SIZE      : int               = 2048 # 256 is already heavy with padding even if using CUDA backend ...
 
-    PARAMS_CACHE_PATH : pathlib.Path      = pathlib.Path('.cache/fft_vis_params.json')
+    PARAMS_CACHE_PATH : pathlib.Path      = pathlib.Path('.cache/fft_viz_params.json')
 
     NUM_PARAMS_CACHES : int               = 9 # shuould be <10 due to the limit of number keys
     # autopep8: on

@@ -2,23 +2,23 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "FFT vis",
+            "name": "FFT viz",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/fft_vis.py",
+            "program": "${workspaceFolder}/fft_viz.py",
             "console": "integratedTerminal",
             "justMyCode": false,
         },
         {
-            "name": "FIR vis",
+            "name": "FIR viz",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/fir_vis.py",
+            "program": "${workspaceFolder}/fir_viz.py",
             "console": "integratedTerminal",
             "justMyCode": false,
         },
         {
-            "name": "windowing vis",
+            "name": "windowing viz",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/windowing.py",

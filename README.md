@@ -1,7 +1,7 @@
 # fft-viz
 
-![teaser_fft_vis](/assets/teaser_fft_vis.png)
-![teaser_fir_vis](/assets/teaser_fir_vis.png)
+![teaser_fft_viz](/assets/teaser_fft_viz.png)
+![teaser_fir_viz](/assets/teaser_fir_viz.png)
 
 A high-quality FFT visualization tool
 
@@ -27,7 +27,7 @@ A high-quality FFT visualization tool
 ## Installation
 
 ```bash
-git clone https://github.com/ShineiArakawa/colors-of-noise-2d.git
+git clone https://github.com/ShineiArakawa/fft_viz.git
 cd fft_viz
 
 pip install -r requirements.txt
@@ -43,10 +43,15 @@ Launch the main visualizer with:
 ```bash
 cd fft_viz
 
-python interactive.py
+python fft_viz.py
 
 # Alternatively, if you are use 'uv' for dependency management:
-# uv run interactive.py
+# uv run fft_viz.py
+
+# You can also run the FIR (finite impluse response) filter visualizer with:
+# python fir_viz.py
+# or
+# uv run fir_viz.py
 ```
 
 The first run may take up to ~20 seconds as it compiles C++/CUDA extensions. Subsequent runs will be much faster thanks to caching.

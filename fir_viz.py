@@ -1,8 +1,58 @@
-"""A interactive visualizer program for high-quality finite impulse response filter design
+"""
+fir_viz
+=======
+
+A interactive visualization program for high-quality finite impulse response filter design
+
+Dev log
+-------
+5.7.2025 : Implemented minimum requirements
+
+TO DO
+-----
+1. 入力画像のプロット x
+2. 入力画像のPSD x
+3. 入力画像のPSDプロファイル x
+4. フィルターのプロット x
+5. フィルターのプロファイル x
+6. フィルターされたフーリエ係数のPSDプロット x
+7. フィルターされたフーリエ係数のプロファイル x
+8. 出力画像のプロット x
+
+9. PSD関係の計算にはwindowingとpaddingの切り替えができるようにする (必要ないかも)
+
+## Filter
+
+1. 正規化方法の見直し
+   normで割るのが妥当 x
+2. フィルターの追加
+   1. Butterworth
+   2. Chebyshev
+   3. Elliptic
+   4. Kaiser (優先度は低め)
+3. 2次元展開方法の提案
+   1. 外積法
+   2. Exactサンプリング
+4. 高品質なフィルタ設計
+   1. パディングによる高周波成分の抑制
+
+## その他
+
+1. Performance tuning
+
+参考リンク
+https://scikit-image.org/docs/0.25.x/auto_examples/filters/plot_butterworth.html
+
+Contact
+-------
+
+- Author: Shinei Arakawa
+- Email: arakawashinei1115@gmail.com
 """
 
 # autopep8: off
 # isort: skip_file
+
 from __future__ import annotations
 
 import argparse
@@ -31,8 +81,8 @@ import torchvision.transforms.v2.functional as F
 import typing_extensions
 from imgui_bundle import imgui, implot
 
-import util
-import filtering
+import lib.util as util
+import lib.filtering as filtering
 # autopep8: on
 
 logger = util.get_logger()
@@ -235,7 +285,7 @@ class ImageFile:
 
 
 class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
-    """Visualizer class for finite impulse response filters
+    """Visualizer class for finite impulse response filter designs
     """
 
     # ------------------------------------------------------------------------------------
@@ -251,7 +301,7 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
     MIN_IMG_SIZE      : int               = 5    # it has to larger than 4
     MAX_IMG_SIZE      : int               = 2048 # 256 is already heavy with padding even if using CUDA backend ...
 
-    PARAMS_CACHE_PATH : pathlib.Path      = pathlib.Path('.cache/fir_vis_params.json')
+    PARAMS_CACHE_PATH : pathlib.Path      = pathlib.Path('.cache/fir_viz_params.json')
 
     NUM_PARAMS_CACHES : int               = 9 # shuould be <10 due to the limit of number keys
     # autopep8: on
@@ -1241,7 +1291,7 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description='A high-quality finite impulse response filter visualization tool',
+        description='A interactive visualization program for high-quality finite impulse response filter design',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
 
