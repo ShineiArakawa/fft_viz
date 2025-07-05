@@ -68,6 +68,7 @@ import uuid
 # NOTE: Make sure to import PyTorch before importing PyViewer-extended
 import torch
 
+import cachetools
 import nfdpy
 import numpy as np
 import pydantic
@@ -280,6 +281,32 @@ class ImageFile:
     img_read_mode: io.ImageReadMode
 
 
+@pydantic.dataclasses.dataclass(config=pydantic.dataclasses.ConfigDict(arbitrary_types_allowed=True))
+class RenderResult:
+    # autopep8: off
+    input_img                 : torch.Tensor | None = None
+    input_axial_psd_h         : np.ndarray   | None = None
+    input_axial_psd_v         : np.ndarray   | None = None
+    input_psd_img             : np.ndarray   | None = None
+    input_rad_psd             : np.ndarray   | None = None
+
+    filter_img                : np.ndarray   | None = None
+    filter_profile_horizontal : np.ndarray   | None = None
+    filter_profile_vertical   : np.ndarray   | None = None
+
+    filtered_axial_psd_h      : np.ndarray   | None = None
+    filtered_axial_psd_v      : np.ndarray   | None = None
+    filtered_psd_img          : np.ndarray   | None = None
+    filtered_rad_psd          : np.ndarray   | None = None
+
+    output_img                : torch.Tensor | None = None
+
+    diff_img                  : torch.Tensor | None = None
+    diff_min                  : float               = 0.0
+    diff_max                  : float               = 0.0
+    # autopep8: on
+
+
 # --------------------------------------------------------------------------------------------------------------------------------------------------------
 # Viewer
 
@@ -331,28 +358,8 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         """
 
         self.state.params = Params()
-        self.state.prev_params = None
-
-        self.state.input_img = None
-        self.state.input_axial_psd_h = None
-        self.state.input_axial_psd_v = None
-        self.state.input_psd_img = None
-        self.state.input_rad_psd = None
-
-        self.state.filter_img = None
-        self.state.filter_profile_horizontal = None
-        self.state.filter_profile_vertical = None
-
-        self.state.filtered_axial_psd_h = None
-        self.state.filtered_axial_psd_v = None
-        self.state.filtered_psd_img = None
-        self.state.filtered_rad_psd = None
-
-        self.state.output_img = None
-
-        self.state.diff_img = None
-        self.state.diff_min = 0.0
-        self.state.diff_max = 0.0
+        self.state.render_result_cache = cachetools.FIFOCache(maxsize=8)
+        self.state.cur_render_result = RenderResult()
 
         self.state.current_filter_item = 0
         self.state.current_filter_to_add_item = 0
@@ -443,52 +450,60 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
     @typing_extensions.override
     def compute(self) -> dict[str, np.ndarray]:
         # Check if the parameters have changed
-        if self.state.prev_params is not None and self.state.prev_params == self.params:
+
+        params_hash = hash(json.dumps(self.params.dump()))  # volatile hash
+
+        if params_hash in self.state.render_result_cache:
+            cached: RenderResult = self.state.render_result_cache[params_hash]
+            self.state.cur_render_result = cached
             return {
-                self.KEY_INPUT: self.state.input_img,
-                self.KEY_OUTPUT: self.state.output_img,
-                self.KEY_DIFFERENCE: self.state.diff_img,
+                self.KEY_INPUT: cached.input_img,
+                self.KEY_OUTPUT: cached.output_img,
+                self.KEY_DIFFERENCE: cached.diff_img,
             }
+
+        params = copy.deepcopy(self.params)  # Detach parameters
+        render_result = RenderResult()
 
         # ---------------------------------------------------------------------------------------------------
         # Compute a sinusoidal image
 
-        wave_number = self.params.wave_number
-        target_freq = wave_number / self.params.img_size  # [cycles/pixel]
+        wave_number = params.wave_number
+        target_freq = wave_number / params.img_size  # [cycles/pixel]
 
-        if (self.params.img_mode == ImageMode.file or self.params.img_mode == ImageMode.file_RGB) and self.params.img_path.is_file():
+        if (params.img_mode == ImageMode.file or params.img_mode == ImageMode.file_RGB) and params.img_path.is_file():
             # From file
-            img_read_mode = io.ImageReadMode.RGB if self.params.img_mode == ImageMode.file_RGB else io.ImageReadMode.GRAY
+            img_read_mode = io.ImageReadMode.RGB if params.img_mode == ImageMode.file_RGB else io.ImageReadMode.GRAY
 
             # Buffer the image data to avoid reading it from file multiple times
-            if self.base_img is None or self.base_img.file_path != self.params.img_path or self.base_img.img_read_mode != img_read_mode:
-                img_decoded = io.decode_image(self.params.img_path, mode=img_read_mode)
+            if self.base_img is None or self.base_img.file_path != params.img_path or self.base_img.img_read_mode != img_read_mode:
+                img_decoded = io.decode_image(params.img_path, mode=img_read_mode)
                 img_decoded = F.to_dtype(img_decoded, scale=True).to(dtype=_dtype, device=_device)
-                self.base_img = ImageFile(img=img_decoded, file_path=self.params.img_path, img_read_mode=img_read_mode)
+                self.base_img = ImageFile(img=img_decoded, file_path=params.img_path, img_read_mode=img_read_mode)
 
             img = self.base_img.img  # [channels, img_size, img_size]
 
             # Rotate the image
             img = F.rotate_image(
                 img,
-                angle=-self.params.rotate,
+                angle=-params.rotate,
                 center=None,  # Center the image
                 interpolation=F.InterpolationMode.BILINEAR,
                 expand=False,  # Do not expand the image
             )
-        elif (self.params.img_mode == ImageMode.gaussian or self.params.img_mode == ImageMode.gaussian_RGB):
-            num_channels = 3 if self.params.img_mode == ImageMode.gaussian_RGB else 1
+        elif (params.img_mode == ImageMode.gaussian or params.img_mode == ImageMode.gaussian_RGB):
+            num_channels = 3 if params.img_mode == ImageMode.gaussian_RGB else 1
 
-            generator = torch.Generator(device=_device).manual_seed(self.params.seed)
-            img = self.params.sigma * torch.randn((num_channels, self.params.img_size, self.params.img_size), dtype=_dtype, device=_device, generator=generator)  # zero DC
+            generator = torch.Generator(device=_device).manual_seed(params.seed)
+            img = params.sigma * torch.randn((num_channels, params.img_size, params.img_size), dtype=_dtype, device=_device, generator=generator)  # zero DC
         else:
-            canvas_size = self.params.img_size
+            canvas_size = params.img_size
 
             t = torch.linspace(0.0, canvas_size - 1.0, canvas_size, dtype=_dtype, device=_device)
             t = t - t.mean()  # Center the grid around zero
             grid = torch.stack(torch.meshgrid(t, t, indexing='ij'), dim=-1)  # [n_pixels, n_pixels, 2]
 
-            rad_angle = math.pi * self.params.rotate / 180.0
+            rad_angle = math.pi * params.rotate / 180.0
             rot_mat = torch.tensor([
                 [math.cos(rad_angle), -math.sin(rad_angle)],
                 [math.sin(rad_angle), math.cos(rad_angle)]
@@ -507,7 +522,7 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         assert img.shape[0] in [1, 3]
 
         # Center crop the image
-        img = F.center_crop(img, (self.params.img_size, self.params.img_size))
+        img = F.center_crop(img, (params.img_size, params.img_size))
 
         # Images for visualization
         input_img = img.detach().clone().to(dtype=torch.float32, device=_device)  # [c, h, w]
@@ -523,7 +538,7 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         # Sanity check
         assert input_img.ndim == 3
         assert input_img.shape[-1] == 3
-        self.state.input_img = input_img
+        render_result.input_img = input_img
 
         # ---------------------------------------------------------------------------------------------------
         # FFT
@@ -536,8 +551,8 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         # Axial psd
         half_h = img.shape[-2] // 2
         half_w = img.shape[-1] // 2
-        self.state.input_axial_psd_h = np.ascontiguousarray(np.fft.ifftshift(input_psd[:, half_h, :].cpu().numpy(), axes=1)[:, :half_w], dtype=np.float64)  # [C, W]
-        self.state.input_axial_psd_v = np.ascontiguousarray(np.fft.ifftshift(input_psd[:, :, half_w].cpu().numpy(), axes=1)[:, :half_h], dtype=np.float64)  # [C, H]
+        render_result.input_axial_psd_h = np.ascontiguousarray(np.fft.ifftshift(input_psd[:, half_h, :].cpu().numpy(), axes=1)[:, :half_w], dtype=np.float64)  # [C, W]
+        render_result.input_axial_psd_v = np.ascontiguousarray(np.fft.ifftshift(input_psd[:, :, half_w].cpu().numpy(), axes=1)[:, :half_h], dtype=np.float64)  # [C, H]
 
         # 2D psd plot
         input_psd_img = input_psd.mean(dim=0)                      # take average on channel axis
@@ -545,7 +560,7 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
 
         # Sanity check
         assert input_psd_img.ndim == 2
-        self.state.input_psd_img = np.ascontiguousarray(input_psd_img.cpu().numpy()).astype(np.float32)
+        render_result.input_psd_img = np.ascontiguousarray(input_psd_img.cpu().numpy()).astype(np.float32)
 
         # Compute the radial power spectral density
         input_rad_psd = _module.calc_radial_psd(
@@ -555,17 +570,17 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         )  # [1, n_divs, n_points, C]
 
         input_rad_psd = input_rad_psd.mean(dim=(0, 1))  # [n_points, C]
-        self.state.input_rad_psd = input_rad_psd.cpu().numpy().astype(np.float64)
+        render_result.input_rad_psd = input_rad_psd.cpu().numpy().astype(np.float64)
 
         # ---------------------------------------------------------------------------------------------------
         # Filter
 
         filter_prod = None
-        for filter_inst in self.params.filters:
+        for filter_inst in params.filters:
             f = filter_inst.compute_filter(size=spectrum.shape[-1], dtype=_dtype, device=_device)
             filter_prod = f if filter_prod is None else filter_prod * f
 
-        if self.params.retain_power:
+        if params.retain_power:
             filter_prod *= filter_prod.square().sum().rsqrt()
 
         # Apply filter
@@ -579,14 +594,14 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
 
         # Sanity check
         assert filter_img.ndim == 2
-        self.state.filter_img = 20.0 * np.log10(filter_img + 1e-15)  # to decibels
-        self.state.filter_profile_horizontal = np.ascontiguousarray(np.fft.ifftshift(filter_img[half_h, :])[:half_w], dtype=np.float64)
-        self.state.filter_profile_vertical = np.ascontiguousarray(np.fft.ifftshift(filter_img[:, half_w])[:half_h], dtype=np.float64)
+        render_result.filter_img = 20.0 * np.log10(filter_img + 1e-15)  # to decibels
+        render_result.filter_profile_horizontal = np.ascontiguousarray(np.fft.ifftshift(filter_img[half_h, :])[:half_w], dtype=np.float64)
+        render_result.filter_profile_vertical = np.ascontiguousarray(np.fft.ifftshift(filter_img[:, half_w])[:half_h], dtype=np.float64)
 
         # Filterd psd
         filtered_psd = spectrum.abs().square() / (img.shape[-2] * img.shape[-1])
-        self.state.filtered_axial_psd_h = np.ascontiguousarray(np.fft.ifftshift(filtered_psd[:, half_h, :].cpu().numpy(), axes=1)[:, :half_w], dtype=np.float64)  # [C, W]
-        self.state.filtered_axial_psd_v = np.ascontiguousarray(np.fft.ifftshift(filtered_psd[:, :, half_w].cpu().numpy(), axes=1)[:, :half_h], dtype=np.float64)  # [C, H]
+        render_result.filtered_axial_psd_h = np.ascontiguousarray(np.fft.ifftshift(filtered_psd[:, half_h, :].cpu().numpy(), axes=1)[:, :half_w], dtype=np.float64)  # [C, W]
+        render_result.filtered_axial_psd_v = np.ascontiguousarray(np.fft.ifftshift(filtered_psd[:, :, half_w].cpu().numpy(), axes=1)[:, :half_h], dtype=np.float64)  # [C, H]
 
         # 2D psd plot
         filtered_psd_img = filtered_psd.mean(dim=0)                      # take average on channel axis
@@ -594,7 +609,7 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
 
         # Sanity check
         assert filtered_psd_img.ndim == 2
-        self.state.filtered_psd_img = np.ascontiguousarray(filtered_psd_img.cpu().numpy()).astype(np.float32)
+        render_result.filtered_psd_img = np.ascontiguousarray(filtered_psd_img.cpu().numpy()).astype(np.float32)
 
         # Compute the radial power spectral density
         filtered_rad_psd = _module.calc_radial_psd(
@@ -604,7 +619,7 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         )  # [1, n_divs, n_points, C]
 
         filtered_rad_psd = filtered_rad_psd.mean(dim=(0, 1))  # [n_points, C]
-        self.state.filtered_rad_psd = filtered_rad_psd.cpu().numpy().astype(np.float64)
+        render_result.filtered_rad_psd = filtered_rad_psd.cpu().numpy().astype(np.float64)
 
         # ---------------------------------------------------------------------------------------------------
         # Inverse FFT
@@ -626,7 +641,7 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         # Sanity check
         assert output_img.ndim == 3
         assert output_img.shape[-1] == 3
-        self.state.output_img = output_img
+        render_result.output_img = output_img
 
         # ---------------------------------------------------------------------------------------------------
         # Diff
@@ -647,18 +662,20 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         # Sanity check
         assert diff_img.ndim == 3
         assert diff_img.shape[-1] == 3
-        self.state.diff_img = diff_img
-        self.state.diff_min = float(diff.min())
-        self.state.diff_max = float(diff.max())
+        render_result.diff_img = diff_img
+        render_result.diff_min = float(diff.min())
+        render_result.diff_max = float(diff.max())
 
         # ---------------------------------------------------------------------------------------------------
-        # Copy parameters
-        self.state.prev_params = copy.deepcopy(self.params)
+        # Cache result
+
+        self.state.render_result_cache[params_hash] = render_result
+        self.state.cur_render_result = render_result
 
         return {
-            self.KEY_INPUT: self.state.input_img,
-            self.KEY_OUTPUT: self.state.output_img,
-            self.KEY_DIFFERENCE: self.state.diff_img,
+            self.KEY_INPUT: render_result.input_img,
+            self.KEY_OUTPUT: render_result.output_img,
+            self.KEY_DIFFERENCE: render_result.diff_img,
         }
 
     # ---------------------------------------------------------------------------------------------------
@@ -694,6 +711,8 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
     def toolbar(self) -> None:
         """Build the toolbar UI.
         """
+
+        render_result: RenderResult = self.state.cur_render_result
 
         # ---------------------------------------------------------------------------------------------------
         # Parameter caching
@@ -780,6 +799,7 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
                 filter_name = filtering.filter_names[self.state.current_filter_to_add_item]
                 filter_inst = filtering.filters[filter_name]()
                 self.params.filters.append(filter_inst)
+                self.state.current_filter_item = len(self.params.filters) - 1  # Move cursor to the last
 
             # Remove
             imgui.separator_text('Remove filter')
@@ -843,7 +863,7 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         # Note
         imgui.separator()
         if imgui.collapsing_header('Note', flags=imgui.TreeNodeFlags_.default_open):
-            imgui.text(f'Difference: (Min, Max) = ({self.state.diff_min}, {self.state.diff_max})')
+            imgui.text(f'Difference: (Min, Max) = ({render_result.diff_min}, {render_result.diff_max})')
 
         imgui.separator()
 
@@ -873,6 +893,8 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
 
     @pyviewer_extended.dockable
     def input_psd_plot(self) -> None:
+        render_result: RenderResult = self.state.cur_render_result
+
         # ---------------------------------------------------------------------------------------------------
         # Plot the power spectral density
 
@@ -885,8 +907,8 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         if cmap is not None:
             implot.push_colormap(cmap.value)
 
-        if self.state.input_psd_img is not None:
-            psd_img = self.state.input_psd_img
+        if render_result.input_psd_img is not None:
+            psd_img = render_result.input_psd_img
             scale_min = np.min(psd_img)
             scale_max = np.max(psd_img)
 
@@ -919,17 +941,19 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
 
     @pyviewer_extended.dockable
     def input_psd_profile_plot(self):
+        render_result: RenderResult = self.state.cur_render_result
+
         if imgui.begin_tab_bar('Power Spectral Density Profiles of Input Image'):
             # ----------------------------------------------------------------------------------------------------------------------------------------------------
             # Plot the radial power spectral density
 
             if imgui.begin_tab_item_simple('Radial'):
-                if self.state.input_rad_psd is not None and implot.begin_plot(
+                if render_result.input_rad_psd is not None and implot.begin_plot(
                     'Radial Power Spectral Density of Input Image',
                     size=(-1, -1),
-                    flags=implot.Flags_.no_legend.value if self.state.input_rad_psd.shape[1] == 1 else 0
+                    flags=implot.Flags_.no_legend.value if render_result.input_rad_psd.shape[1] == 1 else 0
                 ):
-                    rad_psd: np.ndarray = self.state.input_rad_psd
+                    rad_psd: np.ndarray = render_result.input_rad_psd
                     is_db_scale = self.params.input_psd_profile_yscale_log
                     if is_db_scale:
                         rad_psd = rad_psd.copy() ** 10
@@ -968,10 +992,10 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
             # ----------------------------------------------------------------------------------------------------------------------------------------------------
             # Plot the axial power spectral density
 
-            for label, axial_psd in (('Horizontal', self.state.input_axial_psd_h), ('Vertical', self.state.input_axial_psd_v)):
+            for label, axial_psd in (('Horizontal', render_result.input_axial_psd_h), ('Vertical', render_result.input_axial_psd_v)):
                 if imgui.begin_tab_item_simple(label):
                     # Plot the axial power spectral density
-                    if axial_psd is not None and self.state.input_psd_img is not None and implot.begin_plot(
+                    if axial_psd is not None and render_result.input_psd_img is not None and implot.begin_plot(
                         f'{label} Power Spectral Density of Input Image',
                         size=(-1, -1),
                         flags=implot.Flags_.no_legend.value if axial_psd.shape[0] == 1 else 0
@@ -980,7 +1004,7 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
                         if is_db_scale:
                             axial_psd = axial_psd.copy() ** 10
 
-                        padded_img_size = self.state.input_psd_img.shape[-1]
+                        padded_img_size = render_result.input_psd_img.shape[-1]
                         freq = np.fft.fftfreq(padded_img_size, d=1.0/self.params.img_size)[1:axial_psd.shape[1]].astype(np.float64)  # assume that the img is square
 
                         # Setup x axis
@@ -1013,6 +1037,8 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
 
     @pyviewer_extended.dockable
     def filter_plot(self) -> None:
+        render_result: RenderResult = self.state.cur_render_result
+
         # ---------------------------------------------------------------------------------------------------
         # Plot the filter
 
@@ -1025,8 +1051,8 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         if cmap is not None:
             implot.push_colormap(cmap.value)
 
-        if self.state.filter_img is not None:
-            filter_img = self.state.filter_img
+        if render_result.filter_img is not None:
+            filter_img = render_result.filter_img
             scale_min = np.min(filter_img)
             scale_max = np.max(filter_img)
 
@@ -1061,18 +1087,20 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
 
     @pyviewer_extended.dockable
     def filter_profile_plot(self):
+        render_result: RenderResult = self.state.cur_render_result
+
         if imgui.begin_tab_bar('Filter Profiles'):
-            for label, filter_profile in (('Horizontal', self.state.filter_profile_horizontal), ('Vertical', self.state.filter_profile_vertical)):
+            for label, filter_profile in (('Horizontal', render_result.filter_profile_horizontal), ('Vertical', render_result.filter_profile_vertical)):
                 if imgui.begin_tab_item_simple(label):
                     # Plot the axial power spectral density
-                    if filter_profile is not None and self.state.input_psd_img is not None and implot.begin_plot(
+                    if filter_profile is not None and render_result.input_psd_img is not None and implot.begin_plot(
                         f'{label} Power Spectral Density of Filter',
                         size=(-1, -1),
                         flags=implot.Flags_.no_legend.value if filter_profile.shape[0] == 1 else 0
                     ):
                         filter_profile = np.log10(filter_profile.copy() ** 20 + 1e-15)  # NOTE: dB for not power but amplitude: 20 * log10(psd)
 
-                        padded_img_size = self.state.input_psd_img.shape[-1]
+                        padded_img_size = render_result.input_psd_img.shape[-1]
                         freq = np.fft.fftfreq(padded_img_size, d=1.0/self.params.img_size)[1:len(filter_profile)].astype(np.float64)  # assume that the img is square
 
                         # Setup x axis
@@ -1096,6 +1124,8 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
 
     @pyviewer_extended.dockable
     def filtered_psd_plot(self) -> None:
+        render_result: RenderResult = self.state.cur_render_result
+
         x_avail, _ = imgui.get_content_region_avail()
         color_bar_prop = 0.10  # 10% for the color bar
         plot_width = x_avail * (1.0 - color_bar_prop)
@@ -1105,8 +1135,8 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         if cmap is not None:
             implot.push_colormap(cmap.value)
 
-        if self.state.filtered_psd_img is not None:
-            psd_img = self.state.filtered_psd_img
+        if render_result.filtered_psd_img is not None:
+            psd_img = render_result.filtered_psd_img
             scale_min = np.min(psd_img)
             scale_max = np.max(psd_img)
 
@@ -1141,17 +1171,19 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
 
     @pyviewer_extended.dockable
     def filtered_psd_profile_plot(self):
+        render_result: RenderResult = self.state.cur_render_result
+
         if imgui.begin_tab_bar('Power Spectral Density Profiles of Filtered Image'):
             # ----------------------------------------------------------------------------------------------------------------------------------------------------
             # Plot the radial power spectral density
 
             if imgui.begin_tab_item_simple('Radial'):
-                if self.state.filtered_rad_psd is not None and implot.begin_plot(
+                if render_result.filtered_rad_psd is not None and implot.begin_plot(
                     'Radial Power Spectral Density of Filtered Image',
                     size=(-1, -1),
-                    flags=implot.Flags_.no_legend.value if self.state.filtered_rad_psd.shape[1] == 1 else 0
+                    flags=implot.Flags_.no_legend.value if render_result.filtered_rad_psd.shape[1] == 1 else 0
                 ):
-                    rad_psd: np.ndarray = self.state.filtered_rad_psd
+                    rad_psd: np.ndarray = render_result.filtered_rad_psd
                     is_db_scale = self.params.filtered_psd_profile_yscale_log
                     if is_db_scale:
                         rad_psd = rad_psd.copy() ** 10
@@ -1190,10 +1222,10 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
             # ----------------------------------------------------------------------------------------------------------------------------------------------------
             # Plot the axial power spectral density
 
-            for label, axial_psd in (('Horizontal', self.state.filtered_axial_psd_h), ('Vertical', self.state.filtered_axial_psd_v)):
+            for label, axial_psd in (('Horizontal', render_result.filtered_axial_psd_h), ('Vertical', render_result.filtered_axial_psd_v)):
                 if imgui.begin_tab_item_simple(label):
                     # Plot the axial power spectral density
-                    if axial_psd is not None and self.state.input_psd_img is not None and implot.begin_plot(
+                    if axial_psd is not None and render_result.input_psd_img is not None and implot.begin_plot(
                         f'{label} Power Spectral Density of Filtered Image',
                         size=(-1, -1),
                         flags=implot.Flags_.no_legend.value if axial_psd.shape[0] == 1 else 0
@@ -1202,7 +1234,7 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
                         if is_db_scale:
                             axial_psd = axial_psd.copy() ** 10
 
-                        padded_img_size = self.state.input_psd_img.shape[-1]
+                        padded_img_size = render_result.input_psd_img.shape[-1]
                         freq = np.fft.fftfreq(padded_img_size, d=1.0/self.params.img_size)[1:axial_psd.shape[1]].astype(np.float64)  # assume that the img is square
 
                         # Setup x axis

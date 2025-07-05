@@ -6,6 +6,7 @@ readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
 dependencies = [
+    "cachetools>=6.1.0",
     "loguru>=0.7.3",
     "nfdpy",
     "numpy>=2.3.0",
