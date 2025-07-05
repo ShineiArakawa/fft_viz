@@ -1312,7 +1312,7 @@ def parse_args() -> argparse.Namespace:
 if __name__ == '__main__':
     args = parse_args()
 
-    vis = FIRVisualizer('FIR Vis', enable_vsync=args.vsync, cache_params=not args.no_cache)
+    viz = FIRVisualizer('FIR Viz', enable_vsync=args.vsync, cache_params=not args.no_cache)
     logger.info('Bye!')
 
 # -------------------------------------------------------------------------------------------------------------------------------------------------

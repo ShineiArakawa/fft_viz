@@ -952,7 +952,7 @@ def parse_args() -> argparse.Namespace:
 if __name__ == '__main__':
     args = parse_args()
 
-    vis = FFTVisualizer('FFT Vis', enable_vsync=args.vsync, cache_params=not args.no_cache)
+    viz = FFTVisualizer('FFT Viz', enable_vsync=args.vsync, cache_params=not args.no_cache)
     logger.info('Bye!')
 
 # -------------------------------------------------------------------------------------------------------------------------------------------------
