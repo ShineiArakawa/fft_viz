@@ -303,9 +303,44 @@ class Chebyshev2HighPassFilter(ChebyshevFilterBase):
         filter = (1.0 + 1.0 / w).rsqrt()
         return filter
 
+# --------------------------------------------------------------------------------------------------------------------------------------------------------
+# Guassian filter
+
+
+class GaussianFilter(FilterBase):
+    """Guassian low-pass filter, which has smooth slope.
+
+    See alse:
+      - https://en.wikipedia.org/wiki/Gaussian_filter
+    """
+
+    INV_SQRT_LN2 = math.sqrt(1.0 / math.log(2.0))
+
+    def __init__(self):
+        super().__init__()
+
+        self._params = {
+            'Cut-off freq': util.ValueEntity(value=10.0, value_type=float, min_value=0.0, max_value=1024.0),
+        }
+
+    def compute_filter(self, size: int, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
+        f_cut = float(self._params['Cut-off freq'].value)
+
+        sigma = self.INV_SQRT_LN2 * f_cut
+
+        freq = torch.fft.fftfreq(n=size, d=1.0 / size).to(dtype=dtype, device=device)  # [size,]
+        freq = torch.fft.fftshift(freq)
+        freq_x, freq_y = torch.meshgrid((freq, freq), indexing='ij')  # [size, size]
+        w = freq_x ** 2 + freq_y ** 2
+
+        filter = torch.exp(- w / (2.0 * sigma * sigma))
+
+        return filter
+
 
 # --------------------------------------------------------------------------------------------------------------------------------------------------------
 # Filter registry
+
 filters: typing.Final[dict[str, typing.Type[FilterBase]]] = {
     # autopep8: off
     'All pass'                           : AllPassFilter,
@@ -317,6 +352,7 @@ filters: typing.Final[dict[str, typing.Type[FilterBase]]] = {
     'Chebyshev I high-pass '             : Chebyshev1HighPassFilter,
     'Chebyshev II low-pass '             : Chebyshev2LowPassFilter,
     'Chebyshev II high-pass '            : Chebyshev2HighPassFilter,
+    'Guassian low-pass'                  : GaussianFilter,
     # autopep8: on
 }
 
