@@ -5,7 +5,9 @@
 
 A high-quality FFT visualization tool
 
-## Features
+## 1. Features
+
+### 1.1 FFT visualization
 
 - 2D DCT analysis on:
   - Sinusoidal wave image
@@ -18,13 +20,26 @@ A high-quality FFT visualization tool
 - Line plots of radial, horizontal, and vertical power spectral density
 - Interactive visualization on above features
 
-## Requirements
+### 1.2 FIR filter visualization
+
+- Supported filters:
+  - All pass
+  - Ideal low-pass
+  - Ideal high-pass
+  - Butterworth low-pass
+  - Butterworth high-pass
+  - Chebyshev type I low-pass
+  - Chebyshev type I high-pass
+  - Chebyshev type II low-pass
+  - Chebyshev type II high-pass
+
+## 2. Requirements
 
 - Python 3.11 or later
 - (Optional) CUDA Toolkit 12.0 or later and NVIDIA GPU
   Used for GPU acceleration. If a compatible GPU is unavailable, the code will fall back to CPU execution with OpenMP
 
-## Installation
+## 3. Installation
 
 ```bash
 git clone https://github.com/ShineiArakawa/fft_viz.git
@@ -36,7 +51,7 @@ pip install -r requirements.txt
 # uv sync
 ```
 
-## Usage
+## 4. Usage
 
 Launch the main visualizer with:
 
@@ -56,6 +71,16 @@ python fft_viz.py
 
 The first run may take up to ~20 seconds as it compiles C++/CUDA extensions. Subsequent runs will be much faster thanks to caching.
 
-## License
+You can also visualize window functions or FIR filters solely with:
+
+```bash
+cd fft_viz
+
+python -m lib.windowing
+
+python -m lib.filtering
+```
+
+## 5. License
 
 This project is licensed under the MIT License. See the [LICENSE](/LICENSE) file for details.

@@ -13,10 +13,10 @@ import pydantic.dataclasses as dataclasses
 import torch
 from imgui_bundle import imgui
 
-ArrayLike = typing.TypeVar('ArrayLike', np.ndarray, torch.Tensor)
-
-
 # ----------------------------------------------------------------------------------------------------------------------------------------------------------
+# Helper function for image processing
+
+ArrayLike = typing.TypeVar('ArrayLike', np.ndarray, torch.Tensor)
 
 
 def normalize_0_to_1(x: ArrayLike, based_on_min_max: bool = False) -> ArrayLike:
@@ -60,6 +60,40 @@ def normalize_0_to_1(x: ArrayLike, based_on_min_max: bool = False) -> ArrayLike:
         max = 1.0
 
     return torch.clamp((x - min) / (max - min + 1e-8), 0.0, 1.0)
+
+# --------------------------------------------------------------------------------------------------------------------------------------------------------
+# Helper function for imgui
+
+
+WidgetReturn = typing.TypeVar('WidgetReturn')
+
+
+def make_unique(func: typing.Callable[[typing.Any], WidgetReturn], label: str, *args, **kwargs) -> WidgetReturn:
+    """Wrap the given function call with push_id/popid context to have a unique widget id.
+
+    >>> make_unique(implot.plot_line, 'sin(2.0 * pi * x)', x, np.sin(2.0 * np.pi * x))
+
+    Parameters
+    ----------
+    func : typing.Callable[[Any], WidgetReturn]
+        Imgui widget function to call
+    label : str
+        Label of the widget
+
+    Returns
+    -------
+    ret : WidgetReturn
+        Returned value from `func`
+    """
+
+    unique_id = label + '_' + uuid.uuid4().hex
+
+    imgui.push_id(unique_id)
+    ret = func(label, *args, **kwargs)
+    imgui.pop_id()
+
+    return ret
+
 
 # ----------------------------------------------------------------------------------------------------------------------------------------------------------
 # Logger utility function
@@ -117,9 +151,10 @@ def get_logger(
     return logger
 
 # --------------------------------------------------------------------------------------------------------------------------------------------------------
+# Easy paramter class with imgui widget
 
 
-ValueTypes = typing.TypeVar('ValueTypes', int, float, bool)
+ValueType = typing.TypeVar('ValueType', int, float, bool)
 
 
 @dataclasses.dataclass(config=config.ConfigDict(arbitrary_types_allowed=True))
@@ -127,22 +162,22 @@ class ValueEntity:
     """Offering flexible parameter handling with imgui
     """
 
-    value: ValueTypes
-    value_type: typing.Type[ValueTypes]
-    min_value: typing.Optional[ValueTypes] = None
-    max_value: typing.Optional[ValueTypes] = None
+    value: ValueType
+    value_type: typing.Type[ValueType]
+    min_value: typing.Optional[ValueType] = None
+    max_value: typing.Optional[ValueType] = None
 
     id: str = None
 
     def __post_init__(self):
         self.id = self.id or uuid.uuid4().hex
 
-    def _draw_slider_widget(self, name: str, hide_label: bool = False) -> ValueTypes:
+    def _draw_slider_widget(self, name: str, hide_label: bool = False) -> ValueType:
         prefix = '## ' if hide_label else ''
 
         imgui.push_id(f'{name}_slider_{self.id}')
 
-        value: ValueTypes = None
+        value: ValueType = None
         if self.value_type is int:
             value = imgui.slider_int(
                 prefix + name,
@@ -166,12 +201,12 @@ class ValueEntity:
 
         return self.value
 
-    def _draw_input_widget(self, name: str, hide_label: bool = False) -> ValueTypes:
+    def _draw_input_widget(self, name: str, hide_label: bool = False) -> ValueType:
         prefix = '## ' if hide_label else ''
 
         imgui.push_id(f'{name}_input_{self.id}')
 
-        value: ValueTypes = None
+        value: ValueType = None
         if self.value_type is int:
             value = imgui.input_int(
                 prefix + name,
@@ -191,12 +226,12 @@ class ValueEntity:
 
         return self.value
 
-    def _draw_checkbox_widget(self, name: str, hide_label: bool = False) -> ValueTypes:
+    def _draw_checkbox_widget(self, name: str, hide_label: bool = False) -> ValueType:
         prefix = '## ' if hide_label else ''
 
         imgui.push_id(f'{name}_checkbox_{self.id}')
 
-        value: ValueTypes = None
+        value: ValueType = None
         if self.value_type is bool:
             value = imgui.checkbox(
                 prefix + name,
@@ -214,7 +249,7 @@ class ValueEntity:
     # ---------------------------------------------------------------------------------------------------
     # Public function
 
-    def draw_param_widgets(self, name: str) -> ValueTypes:
+    def draw_param_widgets(self, name: str) -> ValueType:
         """Draw interactive widgets to assign parameter values."""
 
         if self.value_type in [float, int]:
@@ -235,13 +270,3 @@ class ValueEntity:
             raise TypeError(f'Unsupported value type for {name}: {self.value_type}')
 
         return self.value
-
-# --------------------------------------------------------------------------------------------------------------------------------------------------------
-
-
-def uniquenize(func, label, *args, **kwargs):
-    unique_id = label + '_' + uuid.uuid4().hex
-    imgui.push_id(unique_id)
-    ret = func(label, *args, **kwargs)
-    imgui.pop_id()
-    return ret

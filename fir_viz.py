@@ -815,8 +815,7 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
             imgui.separator_text('Filter params')
             if self.state.current_filter_item < len(self.params.filters):
                 current_filter = self.params.filters[self.state.current_filter_item]
-                for name, param in current_filter.params.items():
-                    param.draw_param_widgets(name)
+                current_filter.draw_param_widgets()
 
             self.params.retain_power = imgui.checkbox('Retain Gain', self.params.retain_power)[1]
 
@@ -978,13 +977,13 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
                     if rad_psd.shape[1] == 3:
                         # RGB
                         implot.set_next_line_style(imgui.ImVec4(1.0, 0.0, 0.0, 1.0))
-                        util.uniquenize(implot.plot_line, 'Radial PSD - Red', freq, np.ascontiguousarray(rad_psd[1:, 0]))
+                        util.make_unique(implot.plot_line, 'Radial PSD - Red', freq, np.ascontiguousarray(rad_psd[1:, 0]))
                         implot.set_next_line_style(imgui.ImVec4(0.0, 1.0, 0.0, 1.0))
-                        util.uniquenize(implot.plot_line, 'Radial PSD - Green', freq, np.ascontiguousarray(rad_psd[1:, 1]))
+                        util.make_unique(implot.plot_line, 'Radial PSD - Green', freq, np.ascontiguousarray(rad_psd[1:, 1]))
                         implot.set_next_line_style(imgui.ImVec4(0.0, 0.0, 1.0, 1.0))
-                        util.uniquenize(implot.plot_line, 'Radial PSD - Blue', freq, np.ascontiguousarray(rad_psd[1:, 2]))
+                        util.make_unique(implot.plot_line, 'Radial PSD - Blue', freq, np.ascontiguousarray(rad_psd[1:, 2]))
                     else:
-                        util.uniquenize(implot.plot_line, 'Radial Power Spectral Density', freq, np.ascontiguousarray(rad_psd[1:, 0]))
+                        util.make_unique(implot.plot_line, 'Radial Power Spectral Density', freq, np.ascontiguousarray(rad_psd[1:, 0]))
 
                     implot.end_plot()
                 imgui.end_tab_item()
@@ -1023,13 +1022,13 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
                         if axial_psd.shape[0] == 3:
                             # RGB
                             implot.set_next_line_style(imgui.ImVec4(1.0, 0.0, 0.0, 1.0))
-                            util.uniquenize(implot.plot_line, f'{label} PSD - Red', freq, np.ascontiguousarray(axial_psd[0, 1:]))
+                            util.make_unique(implot.plot_line, f'{label} PSD - Red', freq, np.ascontiguousarray(axial_psd[0, 1:]))
                             implot.set_next_line_style(imgui.ImVec4(0.0, 1.0, 0.0, 1.0))
-                            util.uniquenize(implot.plot_line, f'{label} PSD - Green', freq, np.ascontiguousarray(axial_psd[1, 1:]))
+                            util.make_unique(implot.plot_line, f'{label} PSD - Green', freq, np.ascontiguousarray(axial_psd[1, 1:]))
                             implot.set_next_line_style(imgui.ImVec4(0.0, 0.0, 1.0, 1.0))
-                            util.uniquenize(implot.plot_line, f'{label} PSD - Blue', freq, np.ascontiguousarray(axial_psd[2, 1:]))
+                            util.make_unique(implot.plot_line, f'{label} PSD - Blue', freq, np.ascontiguousarray(axial_psd[2, 1:]))
                         else:
-                            util.uniquenize(implot.plot_line, f'{label} Power Spectral Density', freq, np.ascontiguousarray(axial_psd[0, 1:]))
+                            util.make_unique(implot.plot_line, f'{label} Power Spectral Density', freq, np.ascontiguousarray(axial_psd[0, 1:]))
 
                         implot.end_plot()
                     imgui.end_tab_item()
@@ -1066,7 +1065,7 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
 
                 implot.setup_axes("Horizontal Frequency [wave number]", "Vertical Frequency [wave number]")
                 implot.setup_axes_limits(-half_size, half_size, -half_size, half_size)
-                util.uniquenize(
+                util.make_unique(
                     implot.plot_heatmap,
                     '##Heatmap Filter',
                     values=filter_img,
@@ -1080,7 +1079,7 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
                 implot.end_plot()
 
             imgui.same_line()
-            util.uniquenize(implot.colormap_scale, "Filter gain [dB]", scale_min, scale_max, size=(color_bar_width, -1))
+            util.make_unique(implot.colormap_scale, "Filter gain [dB]", scale_min, scale_max, size=(color_bar_width, -1))
 
         if cmap is not None:
             implot.pop_colormap()
@@ -1115,7 +1114,7 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
                         implot.setup_axis_scale(implot.ImAxis_.x1, implot.Scale_.log10.value if self.params.filter_response_xscale_log else implot.Scale_.linear.value)
                         implot.setup_axis_scale(implot.ImAxis_.y1, implot.Scale_.linear.value)
 
-                        util.uniquenize(implot.plot_line, f'{label} Filter Response', freq, np.ascontiguousarray(filter_response[1:]))
+                        util.make_unique(implot.plot_line, f'{label} Filter Response', freq, np.ascontiguousarray(filter_response[1:]))
 
                         implot.end_plot()
                     imgui.end_tab_item()
@@ -1149,7 +1148,7 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
 
                 implot.setup_axes("Horizontal Frequency [wave number]", "Vertical Frequency [wave number]")
                 implot.setup_axes_limits(-half_size, half_size, -half_size, half_size)
-                util.uniquenize(
+                util.make_unique(
                     implot.plot_heatmap,
                     '##Heatmap Power Spectral Density of Filtered Image',
                     values=psd_img,
@@ -1163,7 +1162,7 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
                 implot.end_plot()
 
             imgui.same_line()
-            util.uniquenize(implot.colormap_scale, "Power Spectral Density [dB]", scale_min, scale_max, size=(color_bar_width, -1))
+            util.make_unique(implot.colormap_scale, "Power Spectral Density [dB]", scale_min, scale_max, size=(color_bar_width, -1))
 
         if cmap is not None:
             implot.pop_colormap()
@@ -1207,13 +1206,13 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
                     if rad_psd.shape[1] == 3:
                         # RGB
                         implot.set_next_line_style(imgui.ImVec4(1.0, 0.0, 0.0, 1.0))
-                        util.uniquenize(implot.plot_line, 'Radial PSD - Red', freq, np.ascontiguousarray(rad_psd[1:, 0]))
+                        util.make_unique(implot.plot_line, 'Radial PSD - Red', freq, np.ascontiguousarray(rad_psd[1:, 0]))
                         implot.set_next_line_style(imgui.ImVec4(0.0, 1.0, 0.0, 1.0))
-                        util.uniquenize(implot.plot_line, 'Radial PSD - Green', freq, np.ascontiguousarray(rad_psd[1:, 1]))
+                        util.make_unique(implot.plot_line, 'Radial PSD - Green', freq, np.ascontiguousarray(rad_psd[1:, 1]))
                         implot.set_next_line_style(imgui.ImVec4(0.0, 0.0, 1.0, 1.0))
-                        util.uniquenize(implot.plot_line, 'Radial PSD - Blue', freq, np.ascontiguousarray(rad_psd[1:, 2]))
+                        util.make_unique(implot.plot_line, 'Radial PSD - Blue', freq, np.ascontiguousarray(rad_psd[1:, 2]))
                     else:
-                        util.uniquenize(implot.plot_line, 'Radial Power Spectral Density', freq, np.ascontiguousarray(rad_psd[1:, 0]))
+                        util.make_unique(implot.plot_line, 'Radial Power Spectral Density', freq, np.ascontiguousarray(rad_psd[1:, 0]))
 
                     implot.end_plot()
                 imgui.end_tab_item()
@@ -1252,13 +1251,13 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
                         if axial_psd.shape[0] == 3:
                             # RGB
                             implot.set_next_line_style(imgui.ImVec4(1.0, 0.0, 0.0, 1.0))
-                            util.uniquenize(implot.plot_line, f'{label} PSD - Red', freq, np.ascontiguousarray(axial_psd[0, 1:]))
+                            util.make_unique(implot.plot_line, f'{label} PSD - Red', freq, np.ascontiguousarray(axial_psd[0, 1:]))
                             implot.set_next_line_style(imgui.ImVec4(0.0, 1.0, 0.0, 1.0))
-                            util.uniquenize(implot.plot_line, f'{label} PSD - Green', freq, np.ascontiguousarray(axial_psd[1, 1:]))
+                            util.make_unique(implot.plot_line, f'{label} PSD - Green', freq, np.ascontiguousarray(axial_psd[1, 1:]))
                             implot.set_next_line_style(imgui.ImVec4(0.0, 0.0, 1.0, 1.0))
-                            util.uniquenize(implot.plot_line, f'{label} PSD - Blue', freq, np.ascontiguousarray(axial_psd[2, 1:]))
+                            util.make_unique(implot.plot_line, f'{label} PSD - Blue', freq, np.ascontiguousarray(axial_psd[2, 1:]))
                         else:
-                            util.uniquenize(implot.plot_line, f'{label} Power Spectral Density', freq, np.ascontiguousarray(axial_psd[0, 1:]))
+                            util.make_unique(implot.plot_line, f'{label} Power Spectral Density', freq, np.ascontiguousarray(axial_psd[0, 1:]))
 
                         implot.end_plot()
                     imgui.end_tab_item()

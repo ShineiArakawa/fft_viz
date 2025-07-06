@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import abc
 import copy
+import math
 import typing
 
 import torch
@@ -12,7 +13,7 @@ import torch
 import lib.util as util
 
 # --------------------------------------------------------------------------------------------------------------------------------------------------------
-# Base class for easy parameter management by imgui
+# Base class
 
 
 class FilterBase(metaclass=abc.ABCMeta):
@@ -38,8 +39,12 @@ class FilterBase(metaclass=abc.ABCMeta):
     def compute_filter(self, size: int, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
         pass
 
+    def draw_param_widgets(self) -> None:
+        for param_name, param_value in self.params.items():
+            param_value.draw_param_widgets(param_name)
+
 # --------------------------------------------------------------------------------------------------------------------------------------------------------
-# Filters
+# On-op Filter
 
 
 class AllPassFilter(FilterBase):
@@ -49,6 +54,9 @@ class AllPassFilter(FilterBase):
     def compute_filter(self, size: int, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
         filter = torch.ones((size, size), dtype=dtype, device=device)  # [size, size]
         return filter
+
+# --------------------------------------------------------------------------------------------------------------------------------------------------------
+# Ideal Filter
 
 
 class IdealLowPassFilter(FilterBase):
@@ -106,6 +114,9 @@ class IdealHighPassFilter(FilterBase):
 
         return filter
 
+# --------------------------------------------------------------------------------------------------------------------------------------------------------
+# Butterworth Filter
+
 
 class ButterworthFilterBase(FilterBase):
     def __init__(self):
@@ -116,8 +127,9 @@ class ButterworthFilterBase(FilterBase):
             'order': util.ValueEntity(value=5, value_type=int, min_value=1, max_value=100),
         }
 
-    def _compute_squared_w(self, size: int, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
+    def _compute_w(self, size: int, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
         f_cut = float(self._params['Cut-off freq'].value)
+        n = int(self._params['order'].value)  # [wave number]
 
         freq = torch.fft.fftfreq(n=size, d=1.0 / size).to(dtype=dtype, device=device)  # [wave number]
         freq = torch.fft.fftshift(freq)
@@ -126,6 +138,7 @@ class ButterworthFilterBase(FilterBase):
 
         freq_x, freq_y = torch.meshgrid((freq, freq), indexing='ij')  # [size, size]
         w_squared = freq_x ** 2 + freq_y ** 2
+        w_squared = w_squared.pow(n)
 
         return w_squared
 
@@ -140,9 +153,8 @@ class ButterworthLowPassFilter(ButterworthFilterBase):
     """
 
     def compute_filter(self, size: int, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
-        n = int(self._params['order'].value)  # [wave number]
-        w_squared = self._compute_squared_w(size, dtype, device)
-        filter = 1.0 / (1.0 + w_squared.pow(n)).sqrt()
+        w = self._compute_w(size, dtype, device)
+        filter = (1.0 + w).rsqrt()
         return filter
 
 
@@ -156,15 +168,144 @@ class ButterworthHighPassFilter(ButterworthFilterBase):
     """
 
     def compute_filter(self, size: int, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
-        n = int(self._params['order'].value)  # [wave number]
-        w_squared = self._compute_squared_w(size, dtype, device)
-        w = w_squared.pow(n)
+        w = self._compute_w(size, dtype, device)
         filter = (w / (1.0 + w)).sqrt()
+        return filter
+
+# --------------------------------------------------------------------------------------------------------------------------------------------------------
+# Chebyshev Filter
+
+
+@torch.jit.script
+def chebyshev_poly1(x: torch.Tensor, n: int) -> torch.Tensor:
+    """Compute type I chebyshev polynomials with recurrence computation
+
+    See also:
+        - https://en.wikipedia.org/wiki/Chebyshev_polynomials
+    """
+
+    if n == 0:
+        return torch.ones_like(x)
+    elif n == 1:
+        return x
+
+    t_0 = torch.ones_like(x)
+    t_1 = x
+
+    for _ in range(1, n):
+        t_2 = 2.0 * x * t_1 - t_0
+        t_0, t_1 = t_1, t_2
+
+    return t_1
+
+
+class ChebyshevFilterBase(FilterBase):
+    def __init__(self):
+        super().__init__()
+
+        self._params = {
+            'Cut-off freq': util.ValueEntity(value=10.0, value_type=float, min_value=0.0, max_value=1024),
+            'Ripple gain': util.ValueEntity(value=-3.0, value_type=float, min_value=-10.0, max_value=0.0),
+            'Chebyshev poly order': util.ValueEntity(value=4, value_type=int, min_value=0, max_value=10),
+        }
+
+    @abc.abstractmethod
+    def compute_eps(self, delta: float):
+        pass
+
+    def _compute_w(self, size: int, dtype: torch.dtype, device: torch.device, flip_freq: bool = False) -> torch.Tensor:
+        f_cut = float(self._params['Cut-off freq'].value)
+        delta = float(self._params['Ripple gain'].value)
+        n = int(self._params['Chebyshev poly order'].value)
+
+        eps = self.compute_eps(delta)
+
+        freq = torch.fft.fftfreq(n=size, d=1.0 / size).to(dtype=dtype, device=device)  # [wave number]
+        freq = torch.fft.fftshift(freq)
+
+        freq_x, freq_y = torch.meshgrid((freq, freq), indexing='ij')  # [size, size]
+
+        w = (freq_x ** 2 + freq_y ** 2).sqrt()
+        w = f_cut / (w + 1e-20) if flip_freq else w / (f_cut + 1e-20)
+        w = (eps * chebyshev_poly1(w, n)).square()
+
+        return w
+
+
+class Chebyshev1LowPassFilter(ChebyshevFilterBase):
+    """Type I Chebyshev low-pass filter, which has a sharper roll-off than that of betterworth filter. It also has a oscillating gain, called 'ripple,' within passband.
+
+    See also:
+      - https://en.wikipedia.org/wiki/Chebyshev_filter
+      - https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.cheby1.html
+    """
+
+    def compute_eps(self, delta: float):
+        eps = math.sqrt(10.0 ** (- delta / 10.0) - 1.0)
+        return eps
+
+    def compute_filter(self, size: int, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
+        w = self._compute_w(size, dtype, device)
+        filter = (1.0 + w).rsqrt()
+        return filter
+
+
+class Chebyshev1HighPassFilter(ChebyshevFilterBase):
+    """Type I Chebyshev high-pass filter, which has a sharper roll-off than that of betterworth filter. It also has a oscillating gain, called 'ripple,' within passband.
+
+    See also:
+      - https://en.wikipedia.org/wiki/Chebyshev_filter
+      - https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.cheby1.html
+    """
+
+    def compute_eps(self, delta: float):
+        eps = math.sqrt(10.0 ** (- delta / 10.0) - 1.0)
+        return eps
+
+    def compute_filter(self, size: int, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
+        w = self._compute_w(size, dtype, device, flip_freq=True)
+        filter = (1.0 + w).rsqrt()
+        return filter
+
+
+class Chebyshev2LowPassFilter(ChebyshevFilterBase):
+    """Type II Chebyshev low-pass filter, which has a sharper roll-off than that of betterworth filter. It also has a oscillating gain, called 'ripple,' within stopband.
+
+    See also:
+      - https://en.wikipedia.org/wiki/Chebyshev_filter
+      - https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.cheby2.html
+    """
+
+    def compute_eps(self, delta: float):
+        d = 10.0 ** (delta / 10.0)
+        return math.sqrt(d / (1.0 - d))
+
+    def compute_filter(self, size: int, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
+        w = self._compute_w(size, dtype, device, flip_freq=True)
+        filter = (1.0 + 1.0 / w).rsqrt()
+        return filter
+
+
+class Chebyshev2HighPassFilter(ChebyshevFilterBase):
+    """Type II Chebyshev high-pass filter, which has a sharper roll-off than that of betterworth filter. It also has a oscillating gain, called 'ripple,' within stopband.
+
+    See also:
+      - https://en.wikipedia.org/wiki/Chebyshev_filter
+      - https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.cheby2.html
+    """
+
+    def compute_eps(self, delta: float):
+        d = 10.0 ** (delta / 10.0)
+        return math.sqrt(d / (1.0 - d))
+
+    def compute_filter(self, size: int, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
+        w = self._compute_w(size, dtype, device)
+        filter = (1.0 + 1.0 / w).rsqrt()
         return filter
 
 
 # --------------------------------------------------------------------------------------------------------------------------------------------------------
-# Registry
+# Filter registry
 filters: typing.Final[dict[str, typing.Type[FilterBase]]] = {
     # autopep8: off
     'All pass'                           : AllPassFilter,
@@ -172,6 +313,10 @@ filters: typing.Final[dict[str, typing.Type[FilterBase]]] = {
     'Ideal high-pass'                    : IdealHighPassFilter,
     'Butterworth low-pass'               : ButterworthLowPassFilter,
     'Butterworth high-pass'              : ButterworthHighPassFilter,
+    'Chebyshev I low-pass '              : Chebyshev1LowPassFilter,
+    'Chebyshev I high-pass '             : Chebyshev1HighPassFilter,
+    'Chebyshev II low-pass '             : Chebyshev2LowPassFilter,
+    'Chebyshev II high-pass '            : Chebyshev2HighPassFilter,
     # autopep8: on
 }
 
@@ -255,7 +400,7 @@ if __name__ == '__main__':
 
                     implot.setup_axes("Horizontal Frequency [wave number]", "Vertical Frequency [wave number]")
                     implot.setup_axes_limits(-half_size, half_size, -half_size, half_size)
-                    util.uniquenize(
+                    util.make_unique(
                         implot.plot_heatmap,
                         '##Heatmap Filter',
                         values=filter_img,
@@ -269,7 +414,7 @@ if __name__ == '__main__':
                     implot.end_plot()
 
                 imgui.same_line()
-                util.uniquenize(implot.colormap_scale, "Filter gain [dB]", scale_min, scale_max, size=(color_bar_width, -1))
+                util.make_unique(implot.colormap_scale, "Filter gain [dB]", scale_min, scale_max, size=(color_bar_width, -1))
 
             if cmap is not None:
                 implot.pop_colormap()
@@ -301,7 +446,7 @@ if __name__ == '__main__':
                             implot.setup_axis_scale(implot.ImAxis_.x1, implot.Scale_.log10.value if self.state.response_xscale_log else implot.Scale_.linear.value)
                             implot.setup_axis_scale(implot.ImAxis_.y1, implot.Scale_.linear.value)
 
-                            util.uniquenize(implot.plot_line, f'{label} Response', freq, np.ascontiguousarray(filter_response[1:]))
+                            util.make_unique(implot.plot_line, f'{label} Response', freq, np.ascontiguousarray(filter_response[1:]))
 
                             implot.end_plot()
                         imgui.end_tab_item()
@@ -316,8 +461,7 @@ if __name__ == '__main__':
             self.state.cur_filter_idx = imgui.combo('Filter', self.state.cur_filter_idx, filter_names)[1]
 
             cur_filter: FilterBase = self.state.filters[self.state.cur_filter_idx]
-            for name, param in cur_filter.params.items():
-                param.draw_param_widgets(name)
+            cur_filter.draw_param_widgets()
 
             imgui.separator_text('Visualization')
             # autopep8: off
