@@ -198,6 +198,10 @@ class ValueEntity:
         imgui.pop_id()
 
         self.value = self.value_type(value)
+        if self.min_value is not None:
+            self.value = max(self.value, self.min_value)
+        if self.max_value is not None:
+            self.value = min(self.value, self.max_value)
 
         return self.value
 
@@ -223,6 +227,10 @@ class ValueEntity:
         imgui.pop_id()
 
         self.value = self.value_type(value)
+        if self.min_value is not None:
+            self.value = max(self.value, self.min_value)
+        if self.max_value is not None:
+            self.value = min(self.value, self.max_value)
 
         return self.value
 
