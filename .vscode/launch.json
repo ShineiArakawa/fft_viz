@@ -18,12 +18,22 @@
             "justMyCode": false,
         },
         {
-            "name": "windowing viz",
+            "name": "Windowing viz",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/windowing.py",
+            "module": "lib.windowing",
             "console": "integratedTerminal",
             "justMyCode": false,
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Filtering viz",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "lib.filtering",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "cwd": "${workspaceFolder}",
         }
     ]
 }

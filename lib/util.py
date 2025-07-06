@@ -235,3 +235,13 @@ class ValueEntity:
             raise TypeError(f'Unsupported value type for {name}: {self.value_type}')
 
         return self.value
+
+# --------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+def uniquenize(func, label, *args, **kwargs):
+    unique_id = label + '_' + uuid.uuid4().hex
+    imgui.push_id(unique_id)
+    ret = func(label, *args, **kwargs)
+    imgui.pop_id()
+    return ret

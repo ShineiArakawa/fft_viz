@@ -12,7 +12,6 @@ import typing
 import torch
 
 import lib.util as util
-from imgui_bundle import imgui
 # autopep8: on
 
 logger = util.get_logger()
@@ -349,7 +348,7 @@ _window_funcs: dict[str, typing.Type[WindowFunctionBase]] = {
 if __name__ == '__main__':
     import numpy as np
     import pyviewer_extended
-    from imgui_bundle import implot
+    from imgui_bundle import implot, imgui
 
     dtype = torch.float64
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
