@@ -17,6 +17,7 @@ import typing
 # NOTE: Make sure to import PyTorch before importing PyViewer-extended
 import torch
 
+import cachetools
 import nfdpy
 import numpy as np
 import pydantic
@@ -27,7 +28,7 @@ import radpsd.torch_util as _torch_util
 import torchvision.io as io
 import torchvision.transforms.v2.functional as F
 import typing_extensions
-from imgui_bundle import imgui, implot, hello_imgui
+from imgui_bundle import hello_imgui, imgui, implot  # type: ignore
 
 import lib.util as util
 import lib.windowing as windowing
@@ -73,19 +74,6 @@ logger.info(f'Using device: {_device}, dtype: {_dtype}')
 # Parameters
 
 
-class InterpMethod(enum.IntEnum):
-    # autopep8: off
-    nearest                  = 0
-    bilinear                 = 1
-    # autopep8: on
-
-    def to_torch(self) -> F.InterpolationMode:
-        return [
-            F.InterpolationMode.NEAREST,
-            F.InterpolationMode.BILINEAR,
-        ][self.value]
-
-
 class ImageMode(enum.IntEnum):
     # autopep8: off
     sinusoidal             = 0
@@ -119,7 +107,7 @@ DEFAULT_RGB_IMG_PATH: typing.Final[pathlib.Path] = EXAMPLE_RGB_IMG_PATH if EXAMP
 
 @pydantic.dataclasses.dataclass(config=pydantic.config.ConfigDict(arbitrary_types_allowed=True))
 class Params:
-    """Parameters for the Color of Noise visualizer.
+    """Parameters for the FFT visualizer.
     """
 
     # autopep8: off
@@ -159,7 +147,7 @@ class Params:
     psd_profile_xscale_log              : bool         = False                                                                  # show x axis in log10 scale?
     psd_profile_yscale_log              : bool         = True                                                                   # show y axis in log10 scale?
 
-    windowfn_instances                  : dict[str, windowing.WindowFunctionBase] = pydantic.Field(default_factory=dict)        # window functions, instantiated in the __post_init__ method
+    windowfn_instances                  : dict         = pydantic.Field(default_factory=dict)        # window functions, instantiated in the __post_init__ method
     # autopep8: on
 
     def __post_init__(self):
@@ -167,25 +155,42 @@ class Params:
         for name, cls in windowing._window_funcs.items():
             self.windowfn_instances[name] = cls()
 
-    IO_BOUND = [int, float, bool, pathlib.Path]
+    IO_BOUND = [int, float, bool, pathlib.Path, dict]
 
     def load(self, params: dict) -> Params:
-        for field in dataclasses.fields(Params):
-            param_name = field.name
-            param_value = getattr(self, param_name)
+        for param_key, param_value in params.items():
+            # Check param_key is in fields
+            target_field = None
+            for field in dataclasses.fields(Params):
+                if param_key == field.name and any([field.type == bound.__name__ for bound in self.IO_BOUND]):
+                    target_field = field
+                    break
 
-            if param_name not in params or param_value is None:
+            if target_field is None:
+                # Unknown key or out of bound
                 continue
 
-            for target_type in self.IO_BOUND:
-                if isinstance(param_value, target_type):
-                    if isinstance(param_value, pathlib.Path):
-                        param_value = pathlib.Path(params[param_name])
-                    else:
-                        param_value = params[param_name]
+            if field.type is pathlib.Path:
+                param_value = pathlib.Path(param_value)
+                setattr(self, field.name, param_value)
+            elif field.type == 'dict' and isinstance(param_value, dict) and field.name == 'windowfn_instances':
+                for window_name, window_params in param_value.items():
+                    if window_class := window_params.pop('window_class', None):
+                        # Instantiate
+                        window_inst = None
+                        for window_t in windowing._window_funcs.values():
+                            if window_class == window_t.__name__:
+                                window_inst = window_t()
+                                break
 
-                    setattr(self, param_name, param_value)
-                    break
+                        if window_inst is not None:
+                            # Override params
+                            for key, value in window_params.items():
+                                if key in window_inst.params:
+                                    window_inst.params[key].value = window_inst.params[key].value_type(value)
+                            self.windowfn_instances[window_name] = window_inst
+            else:
+                setattr(self, field.name, param_value)
 
         return self
 
@@ -203,9 +208,23 @@ class Params:
                 if isinstance(param_value, target_type):
                     if isinstance(param_value, pathlib.Path):
                         # Convert pathlib.Path to str for json compatibility
-                        param_value = str(param_value)
+                        param_value_out = str(param_value)
+                        params_dict[param_name] = param_value_out
+                    elif isinstance(param_value, dict):
+                        param_value_out = {}
+                        for window_name, window_inst in param_value.items():
+                            if isinstance(window_inst, windowing.WindowFunctionBase):
+                                params = window_inst.params
+                                window_params = {'window_class': window_inst.__class__.__name__}
+                                for key, value in params.items():
+                                    window_params[key] = value.value_type(value.value)
+                                param_value_out[window_name] = window_params
+                        if len(param_value_out) > 0:
+                            params_dict[param_name] = param_value_out
+                    else:
+                        param_value_out = param_value
+                        params_dict[param_name] = param_value_out
 
-                    params_dict[param_name] = param_value
                     break
 
         return params_dict
@@ -216,6 +235,20 @@ class ImageFile:
     img: torch.Tensor
     file_path: pathlib.Path
     img_read_mode: io.ImageReadMode
+
+
+@pydantic.dataclasses.dataclass(config=pydantic.dataclasses.ConfigDict(arbitrary_types_allowed=True))
+class RenderResult:
+    # autopep8: off
+    img             : torch.Tensor | None = None
+    window_img      : torch.Tensor | None = None
+    windowed_img    : torch.Tensor | None = None
+    psd_img         : np.ndarray   | None = None
+    window          : np.ndarray   | None = None
+    rad_psd         : np.ndarray   | None = None
+    axial_psd_h     : np.ndarray   | None = None
+    axial_psd_v     : np.ndarray   | None = None
+    # autopep8: on
 
 
 # --------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -230,13 +263,13 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
     # Constants
 
     # autopep8: off
-    KEY_INPUT         : typing.Final[str] = 'Input'
-    KEY_MASKED        : typing.Final[str] = 'Masked'
-    KEY_MASKED_INPUT  : typing.Final[str] = 'Masked Input'
+    KEY_INPUT           : typing.Final[str] = 'Input'
+    KEY_WINDOW          : typing.Final[str] = 'Window'
+    KEY_WINDOWED_INPUT  : typing.Final[str] = 'Windowed input'
 
-    KEYS                                  = [KEY_INPUT, KEY_MASKED, KEY_MASKED_INPUT]
+    KEYS                                  = [KEY_INPUT, KEY_WINDOW, KEY_WINDOWED_INPUT]
 
-    MIN_IMG_SIZE      : int               = 5    # it has to larger than 4
+    MIN_IMG_SIZE      : int               = 5    # it has to be larger than 4
     MAX_IMG_SIZE      : int               = 2048 # 256 is already heavy with padding even if using CUDA backend ...
 
     PARAMS_CACHE_PATH : pathlib.Path      = pathlib.Path('.cache/fft_viz_params.json')
@@ -270,17 +303,8 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         """
 
         self.state.params = Params()
-        self.state.prev_params = None
-
-        self.state.img = None
-        self.state.window_img = None
-        self.state.windowed_img = None
-        self.state.psd_img = None
-
-        self.state.window = None
-        self.state.rad_psd = None
-        self.state.axial_psd_h = None
-        self.state.axial_psd_v = None
+        self.state.render_result_cache = cachetools.FIFOCache(maxsize=8)
+        self.state.cur_render_result = RenderResult()
 
         self.state.params_cache_file = self.PARAMS_CACHE_PATH
 
@@ -292,8 +316,11 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         self.cached_params[self.cur_cache_param_id] = self.state.params
 
     def load_param_caches(self, file_path: pathlib.Path) -> None:
-        with open(file_path, mode='r') as file:
-            params = json.load(file)
+        try:
+            with open(file_path, mode='r') as file:
+                params = json.load(file)
+        except Exception as e:
+            params = None
 
         if params is not None and isinstance(params, list):
             for i_param, param_dict in enumerate(params):
@@ -303,9 +330,9 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
 
             self.state.params = self.cached_params[self.cur_cache_param_id]
 
-            print(f'Loaded parameters from {file_path}')
+            logger.info(f'Loaded parameters from {file_path}')
         else:
-            print(f'Failed to load parameters from {file_path}')
+            logger.info(f'Failed to load parameters from {file_path}')
 
     def save_param_caches(self, file_path: pathlib.Path) -> None:
         params: list[dict] = []
@@ -318,7 +345,7 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         with open(cache_file, mode='w', encoding='utf8') as file:
             json.dump(params, file, indent=4, ensure_ascii=False)
 
-        print(f'Saved parameters to {cache_file}')
+        logger.info(f'Saved parameters to {cache_file}')
 
     @typing_extensions.override
     def save_settings(self) -> None:
@@ -357,55 +384,72 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
 
     @typing_extensions.override
     def compute(self) -> dict[str, np.ndarray]:
+        params = copy.deepcopy(self.params)  # Detach parameters
+
         # Check if the parameters have changed
-        if self.state.prev_params is not None and self.state.prev_params == self.params:
-            return {
-                self.KEY_INPUT: self.state.img,
-                self.KEY_MASKED: self.state.window_img,
-                self.KEY_MASKED_INPUT: self.state.windowed_img,
-            }
+        params_hash = hash(json.dumps(params.dump()))  # volatile hash
+
+        cached: RenderResult
+        if params_hash in self.state.render_result_cache:
+            cached = self.state.render_result_cache[params_hash]
+        else:
+            cached = self.process(params)
+
+            # Cache result
+            self.state.render_result_cache[params_hash] = cached
+
+        self.state.cur_render_result = cached
+
+        return {
+            self.KEY_INPUT: cached.img,
+            self.KEY_WINDOW: cached.window_img,
+            self.KEY_WINDOWED_INPUT: cached.windowed_img,
+        }
+
+    def process(self, params: Params) -> RenderResult:
+        render_result = RenderResult()
 
         # ---------------------------------------------------------------------------------------------------
         # Compute a sinusoidal image
 
-        wave_number = self.params.wave_number
-        target_freq = wave_number / self.params.img_size  # [cycles/pixel]
+        wave_number = params.wave_number
+        target_freq = wave_number / params.img_size  # [cycles/pixel]
 
-        if (self.params.img_mode == ImageMode.file or self.params.img_mode == ImageMode.file_RGB) and self.params.img_path.is_file():
+        if (params.img_mode == ImageMode.file or params.img_mode == ImageMode.file_RGB) and params.img_path.is_file():
             # From file
 
             super_sampling_factor = 1  # disable super sampling for file images
 
-            img_read_mode = io.ImageReadMode.RGB if self.params.img_mode == ImageMode.file_RGB else io.ImageReadMode.GRAY
+            img_read_mode = io.ImageReadMode.RGB if params.img_mode == ImageMode.file_RGB else io.ImageReadMode.GRAY
 
             # Buffer the image data to avoid reading it from file multiple times
-            if self.base_img is None or self.base_img.file_path != self.params.img_path or self.base_img.img_read_mode != img_read_mode:
-                img_decoded = io.decode_image(self.params.img_path, mode=img_read_mode)
+            if self.base_img is None or self.base_img.file_path != params.img_path or self.base_img.img_read_mode != img_read_mode:
+                img_decoded = io.decode_image(params.img_path, mode=img_read_mode)
                 img_decoded = F.to_dtype(img_decoded, scale=True).to(dtype=_dtype, device=_device)
-                self.base_img = ImageFile(img=img_decoded, file_path=self.params.img_path, img_read_mode=img_read_mode)
+                self.base_img = ImageFile(img=img_decoded, file_path=params.img_path, img_read_mode=img_read_mode)
 
             img = self.base_img.img  # [channels, img_size, img_size]
 
             # Rotate the image
             img = F.rotate_image(
                 img,
-                angle=-self.params.rotate,
+                angle=-params.rotate,
                 center=None,  # Center the image
                 interpolation=F.InterpolationMode.BILINEAR,
                 expand=False,  # Do not expand the image
             )
-        elif (self.params.img_mode == ImageMode.gaussian or self.params.img_mode == ImageMode.gaussian_RGB):
+        elif (params.img_mode == ImageMode.gaussian or params.img_mode == ImageMode.gaussian_RGB):
             super_sampling_factor = 1  # disable super sampling for file images
 
-            num_channels = 3 if self.params.img_mode == ImageMode.gaussian_RGB else 1
+            num_channels = 3 if params.img_mode == ImageMode.gaussian_RGB else 1
 
-            generator = torch.Generator(device=_device).manual_seed(self.params.seed)
-            img = self.params.sigma * torch.randn((num_channels, self.params.img_size, self.params.img_size), dtype=_dtype, device=_device, generator=generator)  # zero DC
+            generator = torch.Generator(device=_device).manual_seed(params.seed)
+            img = params.sigma * torch.randn((num_channels, params.img_size, params.img_size), dtype=_dtype, device=_device, generator=generator)  # zero DC
         else:
-            super_sampling_factor = self.params.super_sampling_factor if self.params.enable_super_sampling else 1
+            super_sampling_factor = params.super_sampling_factor if params.enable_super_sampling else 1
 
             # Allocate larger canvas for the rotation
-            canvas_size = self.params.img_size
+            canvas_size = params.img_size
 
             n_pixels = canvas_size * super_sampling_factor
             w = 1.0 / (super_sampling_factor * 2.0)
@@ -415,7 +459,7 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
             t = t - t.mean()  # Center the grid around zero
             grid = torch.stack(torch.meshgrid(t, t, indexing='ij'), dim=-1)  # [n_pixels, n_pixels, 2]
 
-            rad_angle = math.pi * self.params.rotate / 180.0
+            rad_angle = math.pi * params.rotate / 180.0
             rot_mat = torch.tensor([
                 [math.cos(rad_angle), -math.sin(rad_angle)],
                 [math.sin(rad_angle), math.cos(rad_angle)]
@@ -433,17 +477,17 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         assert img.ndim == 3
         assert img.shape[0] in [1, 3]
 
-        if self.params.enable_pre_filering:
+        if params.enable_pre_filering:
             # Prefilering
             # Pad the image to avoid edge artifacts
-            pad_size = self.params.pre_filter_padding
+            pad_size = params.pre_filter_padding
             img = F.pad_image(img, padding=(pad_size, pad_size, pad_size, pad_size), padding_mode='reflect')
 
             # Apply Gaussian blur
             img = F.gaussian_blur(
                 img,
-                kernel_size=(self.params.kernel_size, self.params.kernel_size),
-                sigma=(self.params.kernel_sigma, self.params.kernel_sigma)
+                kernel_size=(params.kernel_size, params.kernel_size),
+                sigma=(params.kernel_sigma, params.kernel_sigma)
             )
 
             # Remove the padding
@@ -451,8 +495,8 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
                 img = img[:, pad_size:-pad_size, pad_size:-pad_size]
 
         # Center crop the image
-        img = F.center_crop(img, (self.params.img_size * super_sampling_factor, self.params.img_size * super_sampling_factor))
-        img = F.resize(img, size=(self.params.img_size, self.params.img_size), interpolation=F.InterpolationMode.NEAREST, antialias=False)
+        img = F.center_crop(img, (params.img_size * super_sampling_factor, params.img_size * super_sampling_factor))
+        img = F.resize(img, size=(params.img_size, params.img_size), interpolation=F.InterpolationMode.NEAREST, antialias=False)
 
         # Images for visualization
         img_plot = img.detach().clone().to(dtype=torch.float32, device=_device)  # [c, h, w]
@@ -468,14 +512,14 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         # Sanity check
         assert img_plot.ndim == 3
         assert img_plot.shape[-1] == 3
-        self.state.img = img_plot
+        render_result.img = img_plot
 
         # ---------------------------------------------------------------------------------------------------
         # Compute FFT
 
         # Apply windowing
-        window_name = WINDOW_FUNC_NAMES[self.params.window_func] if self.params.enable_windowing else 'rectangular'  # rectangular window is no-op
-        window_func = self.params.windowfn_instances[window_name]
+        window_name = WINDOW_FUNC_NAMES[params.window_func] if params.enable_windowing else 'rectangular'  # rectangular window is no-op
+        window_func = params.windowfn_instances[window_name]
         window, window_2d = window_func.calc_window(img.shape[-1], dtype=img.dtype, device=img.device)
 
         window_2d = window_2d.unsqueeze(0)  # add channel dimension
@@ -486,12 +530,12 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         window_2d_img = window_2d.detach().clone().tile(3, 1, 1).permute(1, 2, 0).to(torch.float32)  # [win_h, win_w, 3]
         window_2d_img = util.normalize_0_to_1(window_2d_img, based_on_min_max=True)
 
-        self.state.window = np.ascontiguousarray(window.cpu().numpy().astype(np.float64))
-        self.state.window_img = window_2d_img
+        render_result.window = np.ascontiguousarray(window.cpu().numpy().astype(np.float64))
+        render_result.window_img = window_2d_img
 
-        if self.params.apply_padding:
+        if params.apply_padding:
             # Apply zero padding
-            padding = (self.params.img_size * self.params.padding_factor - self.params.img_size)
+            padding = (params.img_size * params.padding_factor - params.img_size)
             img = torch.nn.functional.pad(img, (0, padding, 0, padding))
 
         # For visualization
@@ -508,7 +552,7 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         # Sanity check
         assert windowed_img.ndim == 3
         assert windowed_img.shape[-1] == 3
-        self.state.windowed_img = windowed_img
+        render_result.windowed_img = windowed_img
 
         # Compute power spectral density
         spectrum: torch.Tensor = torch.fft.fftn(img, dim=(-2, -1)).abs().square()
@@ -518,8 +562,8 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         # Axial psd
         half_h = img.shape[-2] // 2
         half_w = img.shape[-1] // 2
-        self.state.axial_psd_h = np.ascontiguousarray(np.fft.ifftshift(psd[:, half_h, :].cpu().numpy(), axes=1)[:, :half_w], dtype=np.float64)  # [C, W]
-        self.state.axial_psd_v = np.ascontiguousarray(np.fft.ifftshift(psd[:, :, half_w].cpu().numpy(), axes=1)[:, :half_h], dtype=np.float64)  # [C, H]
+        render_result.axial_psd_h = np.ascontiguousarray(np.fft.ifftshift(psd[:, half_h, :].cpu().numpy(), axes=1)[:, :half_w], dtype=np.float64)  # [C, W]
+        render_result.axial_psd_v = np.ascontiguousarray(np.fft.ifftshift(psd[:, :, half_w].cpu().numpy(), axes=1)[:, :half_h], dtype=np.float64)  # [C, H]
 
         # 2D psd plot
         psd_plot = psd.mean(dim=0)  # take average on channel axis
@@ -527,7 +571,7 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
 
         # Sanity check
         assert psd_plot.ndim == 2
-        self.state.psd_img = np.ascontiguousarray(psd_plot.cpu().numpy()).astype(np.float32)
+        render_result.psd_img = np.ascontiguousarray(psd_plot.cpu().numpy()).astype(np.float32)
 
         # ---------------------------------------------------------------------------------------------------
         # Compute the radial power spectral density
@@ -539,17 +583,9 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
 
         rad_psd = rad_psd.mean(dim=(0, 1))  # [n_points, C]
 
-        self.state.rad_psd = rad_psd.cpu().numpy().astype(np.float64)
+        render_result.rad_psd = rad_psd.cpu().numpy().astype(np.float64)
 
-        # ---------------------------------------------------------------------------------------------------
-        # Copy parameters
-        self.state.prev_params = copy.deepcopy(self.params)
-
-        return {
-            self.KEY_INPUT: self.state.img,
-            self.KEY_MASKED: self.state.window_img,
-            self.KEY_MASKED_INPUT: self.state.windowed_img,
-        }
+        return render_result
 
     def open_img_file_dialog(self) -> None:
         """Open an image file dialog to select an image.
@@ -579,6 +615,8 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         # ---------------------------------------------------------------------------------------------------
         # Plot the power spectral density
 
+        render_result: RenderResult = self.state.cur_render_result
+
         x_avail, _ = imgui.get_content_region_avail()
         color_bar_prop = 0.10  # 10% for the color bar
         plot_width = x_avail * (1.0 - color_bar_prop)
@@ -588,8 +626,8 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         if cmap is not None:
             implot.push_colormap(cmap.value)
 
-        if self.state.psd_img is not None:
-            psd_img = self.state.psd_img
+        if render_result.psd_img is not None:
+            psd_img = render_result.psd_img
             scale_min = np.min(psd_img)
             scale_max = np.max(psd_img)
 
@@ -623,15 +661,17 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
 
     @pyviewer_extended.dockable
     def psd_profile_plot(self):
+        render_result: RenderResult = self.state.cur_render_result
+
         if imgui.begin_tab_bar('Power Spectral Density Profiles'):
             # ----------------------------------------------------------------------------------------------------------------------------------------------------
             # Plot the radial power spectral density
 
             if imgui.begin_tab_item_simple('Radial'):
-                if self.state.rad_psd is not None and implot.begin_plot(
+                if render_result.rad_psd is not None and implot.begin_plot(
                     'Radial Power Spectral Density',
                     size=(-1, -1),
-                    flags=implot.Flags_.no_legend.value if self.state.rad_psd.shape[1] == 1 else 0
+                    flags=implot.Flags_.no_legend.value if render_result.rad_psd.shape[1] == 1 else 0
                 ):
                     # Setup x axis
                     implot.setup_axis(implot.ImAxis_.x1, "Frequency [wave number]")
@@ -646,20 +686,20 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
                     implot.setup_axis_scale(implot.ImAxis_.x1, implot.Scale_.log10.value if self.params.psd_profile_xscale_log else implot.Scale_.linear.value)
                     implot.setup_axis_scale(implot.ImAxis_.y1, implot.Scale_.log10.value if self.params.psd_profile_yscale_log else implot.Scale_.linear.value)
 
-                    freq = radpsd.radial_freq(img_size=self.params.img_size, n_radial_bins=len(self.state.rad_psd), dtype=np.float64)  # [cycles/pix]
+                    freq = radpsd.radial_freq(img_size=self.params.img_size, n_radial_bins=len(render_result.rad_psd), dtype=np.float64)  # [cycles/pix]
                     freq = freq * self.params.img_size  # ranged in [0, ..., img_size / 2]
                     freq = np.ascontiguousarray(freq[1:])  # w/o DC
 
-                    if self.state.rad_psd.shape[1] == 3:
+                    if render_result.rad_psd.shape[1] == 3:
                         # RGB
                         implot.set_next_line_style(imgui.ImVec4(1.0, 0.0, 0.0, 1.0))
-                        implot.plot_line('Radial PSD - Red', freq, np.ascontiguousarray(self.state.rad_psd[1:, 0]))
+                        implot.plot_line('Radial PSD - Red', freq, np.ascontiguousarray(render_result.rad_psd[1:, 0]))
                         implot.set_next_line_style(imgui.ImVec4(0.0, 1.0, 0.0, 1.0))
-                        implot.plot_line('Radial PSD - Green', freq, np.ascontiguousarray(self.state.rad_psd[1:, 1]))
+                        implot.plot_line('Radial PSD - Green', freq, np.ascontiguousarray(render_result.rad_psd[1:, 1]))
                         implot.set_next_line_style(imgui.ImVec4(0.0, 0.0, 1.0, 1.0))
-                        implot.plot_line('Radial PSD - Blue', freq, np.ascontiguousarray(self.state.rad_psd[1:, 2]))
+                        implot.plot_line('Radial PSD - Blue', freq, np.ascontiguousarray(render_result.rad_psd[1:, 2]))
                     else:
-                        implot.plot_line('Radial Power Spectral Density', freq, np.ascontiguousarray(self.state.rad_psd[1:, 0]))
+                        implot.plot_line('Radial Power Spectral Density', freq, np.ascontiguousarray(render_result.rad_psd[1:, 0]))
 
                     implot.end_plot()
                 imgui.end_tab_item()
@@ -667,15 +707,15 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
             # ----------------------------------------------------------------------------------------------------------------------------------------------------
             # Plot the axial power spectral density
 
-            for label, axial_psd in (('Horizontal', self.state.axial_psd_h), ('Vertical', self.state.axial_psd_v)):
+            for label, axial_psd in (('Horizontal', render_result.axial_psd_h), ('Vertical', render_result.axial_psd_v)):
                 if imgui.begin_tab_item_simple(label):
                     # Plot the axial power spectral density
-                    if axial_psd is not None and self.state.psd_img is not None and implot.begin_plot(
+                    if axial_psd is not None and render_result.psd_img is not None and implot.begin_plot(
                         f'{label} Power Spectral Density',
                         size=(-1, -1),
                         flags=implot.Flags_.no_legend.value if axial_psd.shape[0] == 1 else 0
                     ):
-                        padded_img_size = self.state.psd_img.shape[-1]
+                        padded_img_size = render_result.psd_img.shape[-1]
                         freq = np.fft.fftfreq(padded_img_size, d=1.0/self.params.img_size)[1:axial_psd.shape[1]].astype(np.float64)  # assume that the img is square
 
                         # Setup x axis
@@ -710,6 +750,8 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
     def toolbar(self) -> None:
         """Build the toolbar UI for the Color of Noise visualizer.
         """
+
+        render_result: RenderResult = self.state.cur_render_result
 
         # ---------------------------------------------------------------------------------------------------
         # Parameter caching
@@ -821,16 +863,16 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
                     param.draw_param_widgets(name)
 
                 imgui.separator()
-                if self.state.window is not None and implot.begin_plot(f'{window_name} Window', size=(-1, 256)):
+                if render_result.window is not None and implot.begin_plot(f'{window_name} Window', size=(-1, 256)):
                     implot.setup_axes('Pixel', 'Weight')
                     implot.setup_axes_limits(
                         0.0,
-                        self.state.window.shape[0] - 1,
+                        render_result.window.shape[0] - 1,
                         -0.3,
                         1.3,
                         imgui.Cond_.always.value,
                     )
-                    implot.plot_line(f'{window_name} window', self.state.window)
+                    implot.plot_line(f'{window_name} window', render_result.window)
                     implot.end_plot()
 
         imgui.separator()
@@ -892,7 +934,7 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         #   + ---------------------------- + ---------------------------- + ---------------------------- + ---------------------------- +
         #   | 'psd_plot'                   | 'Input'                                                     |                              |
         #   + ---------------------------- + ---------------------------- + ---------------------------- + 'toolbar'                    |
-        #   | 'psd_profile_plot'           | 'Masked'                     | 'Masked Input'               |                              |
+        #   | 'psd_profile_plot'           | 'Window'                     | 'Windowed input'             |                              |
         #   + ---------------------------- + ---------------------------- + ---------------------------- + ---------------------------- |
         #
         # Dockspace names
@@ -917,8 +959,8 @@ class FFTVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
 
         title_to_dockspace_name = {
             # autopep8: off
-                           'psd_plot' : 'MainDockSpace',          'Input' : 'Dock0',      'toolbar' : 'Dock1',
-                   'psd_profile_plot' :         'Dock2',         'Masked' : 'Dock3', 'Masked Input' : 'Dock4',
+                           'psd_plot' : 'MainDockSpace',          'Input' : 'Dock0',        'toolbar' : 'Dock1',
+                   'psd_profile_plot' :         'Dock2',         'Window' : 'Dock3', 'Windowed input' : 'Dock4',
             # autopep8: on
         }
 

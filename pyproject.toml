@@ -1,6 +1,6 @@
 [project]
 name = "fft-viz"
-version = "1.2.0"
+version = "1.2.1"
 description = "A high-quality FFT visualization tool"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -24,6 +24,4 @@ pyviewer-extended = { git = "https://github.com/ShineiArakawa/pyviewer-extended.
 radpsd = { git = "https://github.com/ShineiArakawa/radpsd.git", tag = "v1.1.2" }
 
 [dependency-groups]
-dev = [
-    "matplotlib>=3.10.3",
-]
+dev = ["matplotlib>=3.10.3"]

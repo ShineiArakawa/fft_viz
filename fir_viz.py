@@ -26,12 +26,13 @@ TO DO
 1. 正規化方法の見直し
    normで割るのが妥当 x
 2. フィルターの追加
-   1. Butterworth
-   2. Chebyshev
+   1. Butterworth x
+   2. Chebyshev x
    3. Elliptic
    4. Kaiser (優先度は低め)
+   5. Gaussian x
 3. 2次元展開方法の提案
-   1. 外積法
+   1. 外積法 x
    2. Exactサンプリング
 4. 高品質なフィルタ設計
    1. パディングによる高周波成分の抑制
@@ -40,7 +41,8 @@ TO DO
 
 1. Performance tuning
 
-参考リンク
+### 参考リンク
+
 https://scikit-image.org/docs/0.25.x/auto_examples/filters/plot_butterworth.html
 
 Contact
@@ -52,7 +54,6 @@ Contact
 
 # autopep8: off
 # isort: skip_file
-
 from __future__ import annotations
 
 import argparse
@@ -63,7 +64,6 @@ import json
 import math
 import pathlib
 import typing
-import uuid
 
 # NOTE: Make sure to import PyTorch before importing PyViewer-extended
 import torch
@@ -151,7 +151,7 @@ DEFAULT_RGB_IMG_PATH: typing.Final[pathlib.Path] = EXAMPLE_RGB_IMG_PATH if EXAMP
 
 @pydantic.dataclasses.dataclass(config=pydantic.config.ConfigDict(arbitrary_types_allowed=True))
 class Params:
-    """Parameters for the Color of Noise visualizer.
+    """Parameters for the FIR visualizer.
     """
 
     # autopep8: off
@@ -318,7 +318,7 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
 
     KEYS                                  = [KEY_INPUT, KEY_OUTPUT, KEY_DIFFERENCE]
 
-    MIN_IMG_SIZE      : int               = 5    # it has to larger than 4
+    MIN_IMG_SIZE      : int               = 5    # it has to be larger than 4
     MAX_IMG_SIZE      : int               = 2048 # 256 is already heavy with padding even if using CUDA backend ...
 
     PARAMS_CACHE_PATH : pathlib.Path      = pathlib.Path('.cache/fir_viz_params.json')
@@ -381,9 +381,9 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
 
             self.state.params = self.cached_params[self.cur_cache_param_id]
 
-            print(f'Loaded parameters from {file_path}')
+            logger.info(f'Loaded parameters from {file_path}')
         else:
-            print(f'Failed to load parameters from {file_path}')
+            logger.info(f'Failed to load parameters from {file_path}')
 
     def save_param_caches(self, file_path: pathlib.Path) -> None:
         params: list[dict] = []
@@ -396,7 +396,7 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         with open(cache_file, mode='w', encoding='utf8') as file:
             json.dump(params, file, indent=4, ensure_ascii=False)
 
-        print(f'Saved parameters to {cache_file}')
+        logger.info(f'Saved parameters to {cache_file}')
 
     @typing_extensions.override
     def save_settings(self) -> None:
@@ -442,20 +442,29 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
 
     @typing_extensions.override
     def compute(self) -> dict[str, np.ndarray]:
-        # Check if the parameters have changed
-
-        params_hash = hash(json.dumps(self.params.dump()))  # volatile hash
-
-        if params_hash in self.state.render_result_cache:
-            cached: RenderResult = self.state.render_result_cache[params_hash]
-            self.state.cur_render_result = cached
-            return {
-                self.KEY_INPUT: cached.input_img,
-                self.KEY_OUTPUT: cached.output_img,
-                self.KEY_DIFFERENCE: cached.diff_img,
-            }
-
         params = copy.deepcopy(self.params)  # Detach parameters
+
+        # Check if the parameters have changed
+        params_hash = hash(json.dumps(params.dump()))  # volatile hash
+
+        cached: RenderResult
+        if params_hash in self.state.render_result_cache:
+            cached = self.state.render_result_cache[params_hash]
+        else:
+            cached = self.process(params)
+
+            # Cache result
+            self.state.render_result_cache[params_hash] = cached
+
+        self.state.cur_render_result = cached
+
+        return {
+            self.KEY_INPUT: cached.input_img,
+            self.KEY_OUTPUT: cached.output_img,
+            self.KEY_DIFFERENCE: cached.diff_img,
+        }
+
+    def process(self, params: Params) -> RenderResult:
         render_result = RenderResult()
 
         # ---------------------------------------------------------------------------------------------------
@@ -659,17 +668,7 @@ class FIRVisualizer(pyviewer_extended.MultiTexturesDockingViewer):
         render_result.diff_min = float(diff.min())
         render_result.diff_max = float(diff.max())
 
-        # ---------------------------------------------------------------------------------------------------
-        # Cache result
-
-        self.state.render_result_cache[params_hash] = render_result
-        self.state.cur_render_result = render_result
-
-        return {
-            self.KEY_INPUT: render_result.input_img,
-            self.KEY_OUTPUT: render_result.output_img,
-            self.KEY_DIFFERENCE: render_result.diff_img,
-        }
+        return render_result
 
     # ---------------------------------------------------------------------------------------------------
     # Dialog openers

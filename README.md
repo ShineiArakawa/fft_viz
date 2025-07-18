@@ -47,7 +47,7 @@ cd fft_viz
 
 pip install -r requirements.txt
 
-# Alternatively, if you are use 'uv' for dependency management:
+# Alternatively, if you use 'uv' for dependency management:
 # uv sync
 ```
 
@@ -60,7 +60,7 @@ cd fft_viz
 
 python fft_viz.py
 
-# Alternatively, if you are use 'uv' for dependency management:
+# Alternatively, if you use 'uv' for dependency management:
 # uv run fft_viz.py
 
 # You can also run the FIR (finite impluse response) filter visualizer with:
